@@ -21,14 +21,10 @@ pub struct Task {
     #[serde(default)]
     pub model: Option<String>,
     pub prompt: String,
-    #[serde(default = "default_true")]
+    #[serde(default)]
     pub dangerously_skip_permissions: bool,
     #[serde(default)]
     pub enabled: bool,
-}
-
-fn default_true() -> bool {
-    true
 }
 
 #[derive(Debug, Clone)]
@@ -63,8 +59,19 @@ impl Task {
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct TasksFile {
+    #[serde(default)]
+    pub settings: Settings,
     #[serde(default, rename = "task")]
     pub tasks: Vec<Task>,
+}
+
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Settings {
+    /// Absolute path to the `opencode` binary. If unset, we fall back to
+    /// PATH lookup of `"opencode"` — which is convenient but vulnerable to
+    /// PATH hijacking, so production setups should set this explicitly.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub opencode_binary: Option<PathBuf>,
 }
 
 pub fn tasks_file_path() -> PathBuf {

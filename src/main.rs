@@ -26,7 +26,7 @@ use iced::{
 use tokio::runtime::Handle;
 use tokio::sync::Notify;
 
-use opencode_orchestrator::config::{self, Task, TasksFile};
+use opencode_orchestrator::config::{self, Settings, Task, TasksFile};
 use opencode_orchestrator::db::{Db, Run};
 use opencode_orchestrator::opencode::storage::{self, Message as ChatMessage, Part as ChatPart};
 use opencode_orchestrator::opencode::{Cli, Model};
@@ -254,12 +254,16 @@ struct App {
     cli: Cli,
     db: Db,
     tasks: Vec<Task>,
+    settings: Settings,
     models: Vec<String>,
     selected_task: Option<String>,
     sub_tab: SubTab,
     edit: EditState,
     history: HistoryState,
     status: Option<StatusMessage>,
+    show_settings: bool,
+    settings_input: String,
+    settings_dirty: bool,
 }
 
 // =============================================================================
@@ -306,6 +310,15 @@ enum Message {
     ToggleExpanded(String),
     // status
     StatusTick,
+    // settings panel
+    SettingsOpen,
+    SettingsClose,
+    SettingsBinaryChanged(String),
+    SettingsBrowseClicked,
+    SettingsBrowsePicked(Option<PathBuf>),
+    SettingsSaveClicked,
+    SettingsRevertClicked,
+    ModelsRefreshed(Vec<String>),
 }
 
 // =============================================================================
@@ -317,6 +330,7 @@ struct Boot {
     cli: Cli,
     db: Db,
     tasks: Vec<Task>,
+    settings: Settings,
     models: Vec<String>,
 }
 
@@ -332,7 +346,19 @@ fn boot() -> anyhow::Result<Boot> {
     // loop drives the UI; the tokio runtime hosts scheduler + spawned runs.
     Box::leak(Box::new(rt));
 
-    let cli = Cli::default();
+    let tasks_file = config::load(&config::tasks_file_path()).context("loading tasks.toml")?;
+    let tasks = tasks_file.tasks.clone();
+
+    let configured = tasks_file.settings.opencode_binary.as_deref();
+    let (cli, honored) = Cli::resolve(configured);
+    if let Some(p) = configured {
+        if !honored {
+            tracing::warn!(
+                "configured opencode_binary {:?} does not exist — falling back to `opencode` on PATH",
+                p
+            );
+        }
+    }
     let models = handle
         .block_on(cli.list_models())
         .unwrap_or_else(|e| {
@@ -345,9 +371,6 @@ fn boot() -> anyhow::Result<Boot> {
 
     let db_path = PathBuf::from("data").join("runs.db");
     let db = Db::open(&db_path).context("opening db")?;
-
-    let tasks_file = config::load(&config::tasks_file_path()).context("loading tasks.toml")?;
-    let tasks = tasks_file.tasks.clone();
 
     // Bootstrap the scheduler exactly like the egui binary used to. Leak the
     // scheduler — it's a fire-and-forget background actor for the program's
@@ -362,11 +385,13 @@ fn boot() -> anyhow::Result<Boot> {
         Ok::<_, anyhow::Error>(())
     })?;
 
+    let settings = tasks_file.settings.clone();
     Ok(Boot {
         rt: handle,
         cli,
         db,
         tasks,
+        settings,
         models,
     })
 }
@@ -374,17 +399,27 @@ fn boot() -> anyhow::Result<Boot> {
 impl App {
     fn new(boot: Boot) -> (Self, iced::Task<Message>) {
         let selected_task = boot.tasks.first().map(|t| t.id.clone());
+        let settings_input = boot
+            .settings
+            .opencode_binary
+            .as_ref()
+            .map(|p| p.to_string_lossy().into_owned())
+            .unwrap_or_default();
         let mut app = Self {
             rt: boot.rt,
             cli: boot.cli,
             db: boot.db,
             tasks: boot.tasks,
+            settings: boot.settings,
             models: boot.models,
             selected_task: selected_task.clone(),
             sub_tab: SubTab::Edit,
             edit: EditState::default(),
             history: HistoryState::default(),
             status: None,
+            show_settings: false,
+            settings_input,
+            settings_dirty: false,
         };
         if let Some(id) = &selected_task {
             app.load_edit_from_id(id);
@@ -520,6 +555,7 @@ impl App {
         config::save(
             &config::tasks_file_path(),
             &TasksFile {
+                settings: self.settings.clone(),
                 tasks: self.tasks.clone(),
             },
         )
@@ -675,7 +711,7 @@ fn make_new_task(existing: &[Task]) -> Task {
         working_dir: std::env::current_dir().unwrap_or_default(),
         model: None,
         prompt: String::new(),
-        dangerously_skip_permissions: true,
+        dangerously_skip_permissions: false,
         enabled: true,
     }
 }
@@ -690,6 +726,7 @@ impl App {
     fn update(&mut self, msg: Message) -> iced::Task<Message> {
         match msg {
             Message::TaskClicked(id) => {
+                self.show_settings = false;
                 if self.selected_task.as_deref() != Some(&id) {
                     self.selected_task = Some(id.clone());
                     self.load_edit_from_id(&id);
@@ -701,6 +738,7 @@ impl App {
                 }
             }
             Message::NewClicked => {
+                self.show_settings = false;
                 let task = make_new_task(&self.tasks);
                 let id = task.id.clone();
                 self.tasks.push(task);
@@ -808,8 +846,122 @@ impl App {
                     }
                 }
             }
+            Message::SettingsOpen => {
+                self.show_settings = true;
+                // Reset the input buffer to mirror persisted state in case the
+                // user opened, edited, closed without saving, then re-opened.
+                self.settings_input = self
+                    .settings
+                    .opencode_binary
+                    .as_ref()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                self.settings_dirty = false;
+            }
+            Message::SettingsClose => {
+                self.show_settings = false;
+                self.settings_dirty = false;
+            }
+            Message::SettingsBinaryChanged(s) => {
+                self.settings_input = s;
+                self.settings_dirty = true;
+            }
+            Message::SettingsBrowseClicked => {
+                let start = if self.settings_input.trim().is_empty() {
+                    std::env::current_dir().unwrap_or_default()
+                } else {
+                    PathBuf::from(self.settings_input.trim())
+                        .parent()
+                        .map(PathBuf::from)
+                        .unwrap_or_else(|| std::env::current_dir().unwrap_or_default())
+                };
+                return iced::Task::perform(
+                    async move {
+                        rfd::AsyncFileDialog::new()
+                            .set_title("Pick opencode binary")
+                            .set_directory(&start)
+                            .pick_file()
+                            .await
+                            .map(|h| h.path().to_path_buf())
+                    },
+                    Message::SettingsBrowsePicked,
+                );
+            }
+            Message::SettingsBrowsePicked(Some(p)) => {
+                self.settings_input = p.to_string_lossy().into_owned();
+                self.settings_dirty = true;
+            }
+            Message::SettingsBrowsePicked(None) => {}
+            Message::SettingsSaveClicked => return self.handle_settings_save(),
+            Message::SettingsRevertClicked => {
+                self.settings_input = self
+                    .settings
+                    .opencode_binary
+                    .as_ref()
+                    .map(|p| p.to_string_lossy().into_owned())
+                    .unwrap_or_default();
+                self.settings_dirty = false;
+            }
+            Message::ModelsRefreshed(models) => {
+                self.models = models;
+            }
         }
         iced::Task::none()
+    }
+
+    fn handle_settings_save(&mut self) -> iced::Task<Message> {
+        let trimmed = self.settings_input.trim();
+        let new_path: Option<PathBuf> = if trimmed.is_empty() {
+            None
+        } else {
+            Some(PathBuf::from(trimmed))
+        };
+        self.settings.opencode_binary = new_path.clone();
+        if let Err(e) = self.save_tasks_file() {
+            self.set_status(StatusKind::Error, format!("Save failed: {e:#}"));
+            return iced::Task::none();
+        }
+        self.settings_dirty = false;
+
+        // Update the live Cli so Run-now uses the new binary immediately. Scheduled
+        // runs still use the scheduler's leaked Cli — restart picks them up.
+        let (new_cli, honored) = Cli::resolve(new_path.as_deref());
+        self.cli = new_cli.clone();
+
+        match (new_path.as_ref(), honored) {
+            (Some(p), true) => self.set_status(
+                StatusKind::Success,
+                format!("Saved. Using `{}`. Restart to apply to scheduled runs.", p.display()),
+            ),
+            (Some(p), false) => self.set_status(
+                StatusKind::Warn,
+                format!(
+                    "Saved, but `{}` does not exist — falling back to `opencode` on PATH.",
+                    p.display()
+                ),
+            ),
+            (None, _) => self.set_status(
+                StatusKind::Info,
+                "Saved. Using `opencode` from PATH.",
+            ),
+        }
+
+        // Re-fetch the model list against the new binary.
+        let cli = new_cli;
+        let rt = self.rt.clone();
+        iced::Task::perform(
+            async move { rt.spawn(async move { cli.list_models().await }).await },
+            |res| {
+                let models = res
+                    .ok()
+                    .and_then(|r| r.ok())
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(|m: Model| m.combined())
+                    .collect();
+                Message::ModelsRefreshed(models)
+            },
+        )
     }
 
     fn handle_save(&mut self) {
@@ -920,12 +1072,49 @@ impl App {
             scrollable(rows).height(Length::Fill).into()
         };
 
+        let showing_settings = self.show_settings;
+        let settings_color = if showing_settings { ACCENT_TEXT } else { TEXT_MUTED };
+        let settings_link = mouse_area(
+            container(
+                row![
+                    icon_svg(ICON_WRENCH, 13.0, settings_color),
+                    Space::with_width(8),
+                    text("Settings")
+                        .size(13)
+                        .style(move |_| text::Style { color: Some(settings_color) }),
+                ]
+                .align_y(Vertical::Center),
+            )
+            .padding(Padding { left: 8.0, right: 8.0, top: 8.0, bottom: 8.0 })
+            .width(Length::Fill)
+            .style(move |_| container::Style {
+                background: Some(Background::Color(if showing_settings { SURFACE } else { Color::TRANSPARENT })),
+                border: Border {
+                    color: if showing_settings { ACCENT } else { Color::TRANSPARENT },
+                    width: if showing_settings { 1.0 } else { 0.0 },
+                    radius: Radius::new(RADIUS_SM),
+                },
+                ..Default::default()
+            }),
+        )
+        .on_press(Message::SettingsOpen)
+        .interaction(iced::mouse::Interaction::Pointer);
+
         container(column![
             header,
             Space::with_height(4),
             count,
             Space::with_height(14),
             body,
+            Space::with_height(8),
+            container(Space::with_height(Length::Fixed(1.0)))
+                .width(Length::Fill)
+                .style(|_| container::Style {
+                    background: Some(Background::Color(BORDER_C)),
+                    ..Default::default()
+                }),
+            Space::with_height(6),
+            settings_link,
         ])
         .padding(Padding { left: 16.0, right: 16.0, top: PAGE_PAD_Y, bottom: 8.0 })
         .width(Length::Fixed(260.0))
@@ -939,6 +1128,17 @@ impl App {
     }
 
     fn center(&self) -> Element<Message> {
+        if self.show_settings {
+            return container(self.settings_view())
+                .padding(Padding { left: PAGE_PAD_X, right: PAGE_PAD_X, top: PAGE_PAD_Y, bottom: 0.0 })
+                .width(Length::Fill)
+                .height(Length::Fill)
+                .style(|_| container::Style {
+                    background: Some(Background::Color(BG)),
+                    ..Default::default()
+                })
+                .into();
+        }
         if self.selected_task.is_none() {
             return container(empty_center())
                 .padding(Padding::new(0.0))
@@ -975,6 +1175,100 @@ impl App {
             background: Some(Background::Color(BG)),
             ..Default::default()
         })
+        .into()
+    }
+
+    fn settings_view(&self) -> Element<Message> {
+        let heading = text("Settings")
+            .size(22)
+            .style(|_| text::Style { color: Some(TEXT_C) })
+            .font(bold());
+
+        // Resolve what binary will actually be used so we can show feedback in
+        // the UI — saved path that exists, saved path missing (fallback), or
+        // unset (PATH lookup).
+        let trimmed = self.settings_input.trim();
+        let resolution: Element<_> = if trimmed.is_empty() {
+            inline_alert(
+                StatusKind::Info,
+                "No path set — using `opencode` from PATH.",
+            )
+            .into()
+        } else if PathBuf::from(trimmed).exists() {
+            inline_alert(StatusKind::Success, "Path exists. This binary will be used.").into()
+        } else {
+            inline_alert(
+                StatusKind::Warn,
+                "Path does not exist — will fall back to `opencode` on PATH.",
+            )
+            .into()
+        };
+
+        let action_bar = row![
+            primary_icon_button(ICON_SAVE, "Save").on_press(Message::SettingsSaveClicked),
+            if self.settings_dirty {
+                Element::from(
+                    icon_button(ICON_REVERT, "Revert", TEXT_MUTED)
+                        .on_press(Message::SettingsRevertClicked),
+                )
+            } else {
+                Element::from(Space::with_width(0))
+            },
+            Space::with_width(Length::Fill),
+            icon_button(ICON_X, "Close", TEXT_MUTED).on_press(Message::SettingsClose),
+        ]
+        .align_y(Vertical::Center)
+        .spacing(8);
+
+        let dirty_alert: Element<_> = if self.settings_dirty {
+            inline_alert(StatusKind::Warn, "Unsaved changes").into()
+        } else {
+            Space::with_height(0).into()
+        };
+
+        let body = column![
+            section("OpenCode binary"),
+            form_label("Absolute path"),
+            row![
+                text_input(
+                    "Leave empty to use `opencode` from PATH",
+                    &self.settings_input,
+                )
+                .on_input(Message::SettingsBinaryChanged)
+                .padding(8)
+                .style(text_input_style),
+                Space::with_width(8),
+                icon_button(ICON_FOLDER, "Browse", TEXT_C).on_press(Message::SettingsBrowseClicked),
+            ]
+            .align_y(Vertical::Center),
+            Space::with_height(10),
+            resolution,
+            Space::with_height(14),
+            text(
+                "Setting an absolute path avoids PATH hijacking: if a hostile `opencode` appears \
+                 earlier in PATH, the orchestrator would otherwise execute it. If the configured \
+                 path is missing or invalid, we fall back to `opencode` on PATH so the app keeps \
+                 working — check the warning above when that happens. Saved values apply to Run \
+                 Now immediately; scheduled runs require a restart.",
+            )
+            .size(12)
+            .style(|_| text::Style { color: Some(TEXT_MUTED) }),
+        ];
+
+        scrollable(
+            column![
+                heading,
+                Space::with_height(14),
+                action_bar,
+                Space::with_height(10),
+                dirty_alert,
+                Space::with_height(14),
+                body,
+                Space::with_height(24),
+            ]
+            .padding(Padding { left: 0.0, right: 8.0, top: 0.0, bottom: 0.0 }),
+        )
+        .height(Length::Fill)
         .into()
     }
 
@@ -2494,6 +2788,7 @@ impl Boot {
             cli: self.cli.clone(),
             db: self.db.clone(),
             tasks: self.tasks.clone(),
+            settings: self.settings.clone(),
             models: self.models.clone(),
         }
     }

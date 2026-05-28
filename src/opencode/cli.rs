@@ -44,6 +44,29 @@ impl Default for Cli {
 }
 
 impl Cli {
+    /// Construct with an explicit binary path (absolute path recommended to
+    /// avoid PATH hijacking). Accepts any `Path`-like value.
+    pub fn with_binary(path: impl AsRef<Path>) -> Self {
+        Self {
+            binary: path.as_ref().to_string_lossy().into_owned(),
+        }
+    }
+
+    /// Resolve a configured-path setting into a `Cli`. If the configured path
+    /// exists, we use it; otherwise we silently fall back to PATH lookup of
+    /// the bare `opencode` command so the orchestrator stays functional when
+    /// the user's config is stale (binary moved, uninstalled, mis-typed).
+    /// Returns the `Cli` and a boolean: `true` if the configured path was
+    /// honored, `false` if we fell back.
+    pub fn resolve(configured: Option<&Path>) -> (Self, bool) {
+        match configured {
+            Some(p) if p.exists() => (Self::with_binary(p), true),
+            Some(_) | None => (Self::default(), false),
+        }
+    }
+}
+
+impl Cli {
     /// `opencode models` — one `<providerID>/<modelID>` per line.
     pub async fn list_models(&self) -> Result<Vec<Model>> {
         let out = Command::new(&self.binary)
