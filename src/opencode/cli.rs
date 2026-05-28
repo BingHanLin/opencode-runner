@@ -5,6 +5,7 @@
 //! the session id from the JSON event stream so the orchestrator can later read
 //! the conversation from `~/.local/share/opencode/storage/`.
 
+use crate::runner::CancelToken;
 use anyhow::{Context, Result};
 use std::path::Path;
 use std::process::Stdio;
@@ -28,6 +29,9 @@ pub struct RunOutcome {
     pub session_id: Option<String>,
     pub exit_status: std::process::ExitStatus,
     pub stderr_tail: String,
+    /// True when the run ended because the caller fired `cancel.cancel()` —
+    /// the runner uses this to mark the run as `aborted` rather than `error`.
+    pub cancelled: bool,
 }
 
 #[derive(Clone)]
@@ -102,13 +106,16 @@ impl Cli {
 
     /// Spawn `opencode run` for one task, returning the outcome once the
     /// process exits. We tail stdout for a session id (`ses_...`) so the
-    /// caller can wire it to a run record.
+    /// caller can wire it to a run record. When `cancel` fires we kill the
+    /// child and surface that in the outcome — callers should treat the
+    /// `cancelled` flag distinctly from a non-zero exit.
     pub async fn run_task(
         &self,
         working_dir: &Path,
         prompt: &str,
         model: Option<&str>,
         dangerously_skip_permissions: bool,
+        cancel: CancelToken,
     ) -> Result<RunOutcome> {
         let trimmed = prompt.trim();
         if trimmed.is_empty() {
@@ -176,7 +183,19 @@ impl Cli {
             tail
         });
 
-        let exit_status = child.wait().await.context("waiting on opencode run")?;
+        // Race the child against the cancel token. If cancelled, fire a kill
+        // and still wait for the process to actually exit so `wait()` reaps
+        // it — leaving a zombie behind would confuse downstream cleanup.
+        let mut cancelled = false;
+        let exit_status = tokio::select! {
+            biased;
+            _ = cancel.cancelled() => {
+                cancelled = true;
+                let _ = child.start_kill();
+                child.wait().await.context("waiting on opencode run after cancel")?
+            }
+            status = child.wait() => status.context("waiting on opencode run")?,
+        };
         let session_id = session_id_handle.await.ok().flatten();
         let stderr_tail = stderr_handle.await.unwrap_or_default();
 
@@ -184,6 +203,7 @@ impl Cli {
             session_id,
             exit_status,
             stderr_tail,
+            cancelled,
         })
     }
 }

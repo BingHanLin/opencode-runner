@@ -2,9 +2,49 @@ use crate::config::Task;
 use crate::db::Db;
 use crate::opencode::Cli;
 use anyhow::{anyhow, Result};
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{Arc, Mutex};
 use tokio::process::Command;
+use tokio::sync::Notify;
+
+/// One-shot cancellation primitive shared with `cli.run_task` so the runner
+/// can cut a long-running opencode child short on user request. Once cancelled
+/// it stays cancelled — checks made after the fact still observe the signal.
+#[derive(Clone, Default)]
+pub struct CancelToken(Arc<(AtomicBool, Notify)>);
+
+impl CancelToken {
+    pub fn new() -> Self {
+        Self::default()
+    }
+    pub fn cancel(&self) {
+        self.0 .0.store(true, Ordering::SeqCst);
+        self.0 .1.notify_waiters();
+    }
+    pub fn is_cancelled(&self) -> bool {
+        self.0 .0.load(Ordering::SeqCst)
+    }
+    /// Resolves immediately if already cancelled; otherwise resolves on the
+    /// next `cancel()` call. Safe to `tokio::select!` against — woken by
+    /// `notify_waiters` even when invoked from a sync context.
+    pub async fn cancelled(&self) {
+        if self.is_cancelled() {
+            return;
+        }
+        self.0 .1.notified().await;
+    }
+}
+
+/// Map of in-flight `run_id`s to their cancel token. The UI holds an `Arc`
+/// clone; clicking Stop on a run pulls the token out and calls `cancel()`.
+pub type CancelRegistry = Arc<Mutex<HashMap<i64, CancelToken>>>;
+
+pub fn new_cancel_registry() -> CancelRegistry {
+    Arc::new(Mutex::new(HashMap::new()))
+}
 
 /// Cheap heuristic so both the UI and the runner agree on what counts as a
 /// git repo. `.git` is either a directory (normal checkout) or a file
@@ -14,17 +54,30 @@ pub fn is_git_repo(path: &Path) -> bool {
 }
 
 /// Execute one task via the `opencode run` CLI; log start/finish in db.
-pub async fn execute(task: &Task, cli: &Cli, db: &Db) -> Result<i64> {
+///
+/// `registry` lets the UI cancel an in-flight run by `run_id`. The token is
+/// inserted on start, passed into `cli.run_task`, and removed once the run
+/// has fully wound down (including worktree cleanup).
+pub async fn execute(task: &Task, cli: &Cli, db: &Db, registry: &CancelRegistry) -> Result<i64> {
     let run_id = db.insert_run_start(&task.id)?;
     tracing::info!(task = %task.id, run_id, "starting task");
 
-    // Optionally swap working_dir for a throwaway git worktree.
-    let worktree = match prepare_worktree(task).await {
+    let cancel = CancelToken::new();
+    registry
+        .lock()
+        .unwrap()
+        .insert(run_id, cancel.clone());
+
+    // Optionally swap working_dir for a throwaway git worktree. prepare_worktree
+    // owns its own per-step event emissions so the timeline shows fetch /
+    // verify / add / .worktreeinclude individually.
+    let worktree = match prepare_worktree(task, db, run_id).await {
         Ok(w) => w,
         Err(e) => {
             let msg = format!("worktree setup failed: {e:#}");
             db.finish_run(run_id, "error", Some(&msg))?;
             tracing::error!(task = %task.id, run_id, "{msg}");
+            registry.lock().unwrap().remove(&run_id);
             return Err(e);
         }
     };
@@ -33,21 +86,38 @@ pub async fn execute(task: &Task, cli: &Cli, db: &Db) -> Result<i64> {
         .map(|w| w.path.as_path())
         .unwrap_or(task.working_dir.as_path());
 
+    let opencode_evt = db.start_event(run_id, "Run opencode").ok();
     let outcome = cli
         .run_task(
             effective_dir,
             &task.prompt,
             task.model.as_deref(),
             task.dangerously_skip_permissions,
+            cancel.clone(),
         )
         .await;
 
     let result = match outcome {
+        Ok(o) if o.cancelled => {
+            if let Some(sid) = &o.session_id {
+                let _ = db.set_run_session(run_id, sid, None);
+            }
+            let msg = "aborted by user";
+            if let Some(id) = opencode_evt {
+                let _ = db.finish_event(id, "aborted", Some(msg));
+            }
+            db.finish_run(run_id, "aborted", Some(msg))?;
+            tracing::info!(task = %task.id, run_id, session = ?o.session_id, "task aborted by user");
+            Ok(run_id)
+        }
         Ok(o) => {
             if let Some(sid) = &o.session_id {
                 let _ = db.set_run_session(run_id, sid, None);
             }
             if o.exit_status.success() {
+                if let Some(id) = opencode_evt {
+                    let _ = db.finish_event(id, "ok", o.session_id.as_deref());
+                }
                 db.finish_run(run_id, "ok", None)?;
                 tracing::info!(task = %task.id, run_id, session = ?o.session_id, "task ok");
             } else {
@@ -56,6 +126,9 @@ pub async fn execute(task: &Task, cli: &Cli, db: &Db) -> Result<i64> {
                     o.exit_status.code(),
                     o.stderr_tail.trim()
                 );
+                if let Some(id) = opencode_evt {
+                    let _ = db.finish_event(id, "error", Some(&msg));
+                }
                 db.finish_run(run_id, "error", Some(&msg))?;
                 tracing::warn!(task = %task.id, run_id, "task failed: {msg}");
             }
@@ -63,6 +136,9 @@ pub async fn execute(task: &Task, cli: &Cli, db: &Db) -> Result<i64> {
         }
         Err(e) => {
             let msg = format!("{e:#}");
+            if let Some(id) = opencode_evt {
+                let _ = db.finish_event(id, "error", Some(&msg));
+            }
             db.finish_run(run_id, "error", Some(&msg))?;
             tracing::error!(task = %task.id, run_id, "task failed to launch: {msg}");
             Err(e)
@@ -73,11 +149,24 @@ pub async fn execute(task: &Task, cli: &Cli, db: &Db) -> Result<i64> {
     // are logged but don't override the run's outcome — a dangling worktree
     // is best-effort cleaned up by `git worktree prune` later.
     if let Some(w) = worktree {
-        if let Err(e) = w.cleanup().await {
-            tracing::warn!(task = %task.id, "worktree cleanup failed: {e:#}");
+        let evt = db.start_event(run_id, "Worktree: cleanup").ok();
+        match w.cleanup().await {
+            Ok(()) => {
+                if let Some(id) = evt {
+                    let _ = db.finish_event(id, "ok", None);
+                }
+            }
+            Err(e) => {
+                let msg = format!("{e:#}");
+                if let Some(id) = evt {
+                    let _ = db.finish_event(id, "error", Some(&msg));
+                }
+                tracing::warn!(task = %task.id, "worktree cleanup failed: {msg}");
+            }
         }
     }
 
+    registry.lock().unwrap().remove(&run_id);
     result
 }
 
@@ -117,7 +206,7 @@ impl WorktreeHandle {
     }
 }
 
-async fn prepare_worktree(task: &Task) -> Result<Option<WorktreeHandle>> {
+async fn prepare_worktree(task: &Task, db: &Db, run_id: i64) -> Result<Option<WorktreeHandle>> {
     if !task.run_in_worktree {
         return Ok(None);
     }
@@ -133,36 +222,127 @@ async fn prepare_worktree(task: &Task) -> Result<Option<WorktreeHandle>> {
         return Ok(None);
     }
 
+    // When the user pinned a base (e.g. "origin/main"), refresh remote refs
+    // first and verify the base resolves; both steps abort the run on failure
+    // rather than silently falling back to HEAD.
+    let base = task.worktree_base.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    if let Some(b) = base {
+        let evt = db.start_event(run_id, "Worktree: git fetch --all").ok();
+        let fetch = Command::new("git")
+            .arg("-C")
+            .arg(&task.working_dir)
+            .arg("fetch")
+            .arg("--all")
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .await?;
+        if !fetch.status.success() {
+            let msg = format!(
+                "exit {:?}: {}",
+                fetch.status.code(),
+                String::from_utf8_lossy(&fetch.stderr).trim()
+            );
+            if let Some(id) = evt {
+                let _ = db.finish_event(id, "error", Some(&msg));
+            }
+            return Err(anyhow!("git fetch --all failed ({msg})"));
+        }
+        if let Some(id) = evt {
+            let _ = db.finish_event(id, "ok", None);
+        }
+
+        let evt = db.start_event(run_id, &format!("Worktree: verify base `{b}`")).ok();
+        let verify = Command::new("git")
+            .arg("-C")
+            .arg(&task.working_dir)
+            .arg("rev-parse")
+            .arg("--verify")
+            .arg("--quiet")
+            .arg(format!("{b}^{{commit}}"))
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .output()
+            .await?;
+        if !verify.status.success() {
+            let msg = format!(
+                "ref {b:?} not found after fetch — check the ref name (remote refs use `<remote>/<branch>` form)"
+            );
+            if let Some(id) = evt {
+                let _ = db.finish_event(id, "error", Some(&msg));
+            }
+            return Err(anyhow!(
+                "worktree base {b:?} not found in {:?} after fetch — aborting",
+                task.working_dir
+            ));
+        }
+        if let Some(id) = evt {
+            let _ = db.finish_event(id, "ok", None);
+        }
+    }
+
     let tmp = std::env::temp_dir().join(format!(
         "opencode-orchestrator-wt-{}",
         uuid::Uuid::new_v4()
     ));
-    let out = Command::new("git")
-        .arg("-C")
+    let add_label = match base {
+        Some(b) => format!("Worktree: git worktree add (from `{b}`)"),
+        None => "Worktree: git worktree add (from HEAD)".to_string(),
+    };
+    let evt = db.start_event(run_id, &add_label).ok();
+    let mut add = Command::new("git");
+    add.arg("-C")
         .arg(&task.working_dir)
         .arg("worktree")
         .arg("add")
         .arg("--detach")
-        .arg(&tmp)
+        .arg(&tmp);
+    if let Some(b) = base {
+        add.arg(b);
+    }
+    let out = add
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::piped())
         .output()
         .await?;
     if !out.status.success() {
-        return Err(anyhow!(
-            "git worktree add failed (exit {:?}): {}",
+        let msg = format!(
+            "exit {:?}: {}",
             out.status.code(),
             String::from_utf8_lossy(&out.stderr).trim()
-        ));
+        );
+        if let Some(id) = evt {
+            let _ = db.finish_event(id, "error", Some(&msg));
+        }
+        return Err(anyhow!("git worktree add failed ({msg})"));
     }
-    tracing::info!(task = %task.id, worktree = ?tmp, "created worktree");
+    if let Some(id) = evt {
+        let _ = db.finish_event(id, "ok", Some(&tmp.display().to_string()));
+    }
+    tracing::info!(task = %task.id, worktree = ?tmp, base = ?base, "created worktree");
 
     // Best-effort: copy entries listed in `.worktreeinclude`. Failures here
     // don't fail the run — the worktree itself is usable, the included files
     // are a convenience. We log every skip/copy decision.
-    if let Err(e) = apply_worktree_include(&task.working_dir, &tmp).await {
-        tracing::warn!(task = %task.id, "applying .worktreeinclude failed: {e:#}");
+    if task.working_dir.join(".worktreeinclude").exists() {
+        let evt = db.start_event(run_id, "Worktree: apply .worktreeinclude").ok();
+        match apply_worktree_include(&task.working_dir, &tmp).await {
+            Ok(()) => {
+                if let Some(id) = evt {
+                    let _ = db.finish_event(id, "ok", None);
+                }
+            }
+            Err(e) => {
+                let msg = format!("{e:#}");
+                if let Some(id) = evt {
+                    let _ = db.finish_event(id, "error", Some(&msg));
+                }
+                tracing::warn!(task = %task.id, "applying .worktreeinclude failed: {msg}");
+            }
+        }
     }
 
     Ok(Some(WorktreeHandle {

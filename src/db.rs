@@ -16,6 +16,19 @@ pub struct Run {
     pub error: Option<String>,
 }
 
+/// One phase of a run — e.g. "Worktree: git fetch --all" or "Run opencode".
+/// Persisted so the UI can render a timeline that survives restarts.
+#[derive(Debug, Clone)]
+pub struct RunEvent {
+    pub id: i64,
+    pub run_id: i64,
+    pub name: String,
+    pub status: String, // "running", "ok", "error"
+    pub started_at: DateTime<Utc>,
+    pub finished_at: Option<DateTime<Utc>>,
+    pub message: Option<String>,
+}
+
 #[derive(Clone)]
 pub struct Db {
     inner: Arc<Mutex<Connection>>,
@@ -42,6 +55,18 @@ impl Db {
             );
             CREATE INDEX IF NOT EXISTS idx_runs_task_id ON runs(task_id);
             CREATE INDEX IF NOT EXISTS idx_runs_started_at ON runs(started_at DESC);
+
+            CREATE TABLE IF NOT EXISTS run_events (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id       INTEGER NOT NULL,
+                name         TEXT NOT NULL,
+                status       TEXT NOT NULL,
+                started_at   TEXT NOT NULL,
+                finished_at  TEXT,
+                message      TEXT,
+                FOREIGN KEY (run_id) REFERENCES runs(id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_run_events_run_id ON run_events(run_id, id);
             "#,
         )?;
         Ok(Self {
@@ -106,6 +131,40 @@ impl Db {
         Ok(out)
     }
 
+    pub fn start_event(&self, run_id: i64, name: &str) -> Result<i64> {
+        let conn = self.inner.lock().unwrap();
+        let now = Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO run_events (run_id, name, status, started_at) VALUES (?1, ?2, 'running', ?3)",
+            params![run_id, name, now],
+        )?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    pub fn finish_event(&self, event_id: i64, status: &str, message: Option<&str>) -> Result<()> {
+        let conn = self.inner.lock().unwrap();
+        let now = Utc::now().to_rfc3339();
+        conn.execute(
+            "UPDATE run_events SET finished_at = ?1, status = ?2, message = ?3 WHERE id = ?4",
+            params![now, status, message, event_id],
+        )?;
+        Ok(())
+    }
+
+    pub fn list_events_for_run(&self, run_id: i64) -> Result<Vec<RunEvent>> {
+        let conn = self.inner.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, run_id, name, status, started_at, finished_at, message
+             FROM run_events WHERE run_id = ?1 ORDER BY id ASC",
+        )?;
+        let rows = stmt.query_map(params![run_id], row_to_event)?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
     #[allow(dead_code)]
     pub fn get_run(&self, id: i64) -> Result<Option<Run>> {
         let conn = self.inner.lock().unwrap();
@@ -130,6 +189,20 @@ fn row_to_run(row: &rusqlite::Row<'_>) -> rusqlite::Result<Run> {
         finished_at: finished_at_s.as_deref().map(parse_rfc3339),
         status: row.get(6)?,
         error: row.get(7)?,
+    })
+}
+
+fn row_to_event(row: &rusqlite::Row<'_>) -> rusqlite::Result<RunEvent> {
+    let started_at_s: String = row.get(4)?;
+    let finished_at_s: Option<String> = row.get(5)?;
+    Ok(RunEvent {
+        id: row.get(0)?,
+        run_id: row.get(1)?,
+        name: row.get(2)?,
+        status: row.get(3)?,
+        started_at: parse_rfc3339(&started_at_s),
+        finished_at: finished_at_s.as_deref().map(parse_rfc3339),
+        message: row.get(6)?,
     })
 }
 

@@ -29,6 +29,13 @@ pub struct Task {
     /// the user's checkout.
     #[serde(default)]
     pub run_in_worktree: bool,
+    /// Commit-ish to base the throwaway worktree on (e.g. `origin/main`).
+    /// When set, the runner does `git fetch --all` first to refresh remote
+    /// refs, then verifies the base exists, then creates the worktree from
+    /// it; any failure aborts the run. When unset, the worktree forks from
+    /// the repo's current HEAD.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worktree_base: Option<String>,
     #[serde(default)]
     pub enabled: bool,
 }

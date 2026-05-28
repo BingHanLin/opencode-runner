@@ -1,7 +1,7 @@
 use crate::config::{Schedule, Task};
 use crate::db::Db;
 use crate::opencode::Cli;
-use crate::runner;
+use crate::runner::{self, CancelRegistry};
 use anyhow::{Context, Result};
 use std::sync::Arc;
 use tokio::sync::Notify;
@@ -14,10 +14,17 @@ pub struct Scheduler {
     cli: Cli,
     db: Db,
     repaint: Arc<Notify>,
+    /// Shared with the GUI so scheduled runs are also Stop-able from the UI.
+    registry: CancelRegistry,
 }
 
 impl Scheduler {
-    pub async fn new(cli: Cli, db: Db, repaint: Arc<Notify>) -> Result<Self> {
+    pub async fn new(
+        cli: Cli,
+        db: Db,
+        repaint: Arc<Notify>,
+        registry: CancelRegistry,
+    ) -> Result<Self> {
         let sched = JobScheduler::new().await.context("JobScheduler::new")?;
         sched.start().await.context("JobScheduler::start")?;
         Ok(Self {
@@ -25,6 +32,7 @@ impl Scheduler {
             cli,
             db,
             repaint,
+            registry,
         })
     }
 
@@ -43,6 +51,7 @@ impl Scheduler {
         let cli = self.cli.clone();
         let db = self.db.clone();
         let repaint = self.repaint.clone();
+        let registry = self.registry.clone();
 
         match schedule {
             Schedule::Cron(expr) => {
@@ -53,8 +62,9 @@ impl Scheduler {
                     let cli = cli.clone();
                     let db = db.clone();
                     let repaint = repaint.clone();
+                    let registry = registry.clone();
                     Box::pin(async move {
-                        let _ = runner::execute(&task, &cli, &db).await;
+                        let _ = runner::execute(&task, &cli, &db, &registry).await;
                         repaint.notify_waiters();
                     })
                 })
@@ -72,9 +82,10 @@ impl Scheduler {
                 let cli = cli.clone();
                 let db = db.clone();
                 let repaint = repaint.clone();
+                let registry = registry.clone();
                 tokio::spawn(async move {
                     tokio::time::sleep(delay).await;
-                    let _ = runner::execute(&task, &cli, &db).await;
+                    let _ = runner::execute(&task, &cli, &db, &registry).await;
                     repaint.notify_waiters();
                 });
             }

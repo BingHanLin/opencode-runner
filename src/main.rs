@@ -27,10 +27,10 @@ use tokio::runtime::Handle;
 use tokio::sync::Notify;
 
 use opencode_orchestrator::config::{self, Settings, Task, TasksFile};
-use opencode_orchestrator::db::{Db, Run};
+use opencode_orchestrator::db::{Db, Run, RunEvent};
 use opencode_orchestrator::opencode::storage::{self, Message as ChatMessage, Part as ChatPart};
 use opencode_orchestrator::opencode::{Cli, Model};
-use opencode_orchestrator::runner;
+use opencode_orchestrator::runner::{self, CancelRegistry};
 use opencode_orchestrator::scheduler::Scheduler;
 
 // =============================================================================
@@ -169,6 +169,7 @@ struct EditState {
     f_model: Option<String>,
     f_skip_perms: bool,
     f_run_in_worktree: bool,
+    f_worktree_base: String,
     f_enabled: bool,
 
     prompt: text_editor::Content,
@@ -197,6 +198,7 @@ impl Default for EditState {
             f_model: None,
             f_skip_perms: false,
             f_run_in_worktree: false,
+            f_worktree_base: String::new(),
             f_enabled: true,
             prompt: text_editor::Content::new(),
             once_date: default_once_date(),
@@ -249,6 +251,11 @@ struct HistoryState {
     convo_session: Option<String>,
     convo_error: Option<String>,
     expanded: HashSet<String>,
+    /// Steps recorded for `selected` — refreshed every tick while the run is
+    /// still in progress so the user sees fetch / verify / opencode / cleanup
+    /// fill in live instead of staring at a blank screen.
+    events: Vec<RunEvent>,
+    events_for: Option<i64>,
 }
 
 struct App {
@@ -266,6 +273,7 @@ struct App {
     show_settings: bool,
     settings_input: String,
     settings_dirty: bool,
+    cancel_registry: CancelRegistry,
 }
 
 // =============================================================================
@@ -298,6 +306,7 @@ enum Message {
     EnabledToggled(bool),
     SkipPermsToggled(bool),
     RunInWorktreeToggled(bool),
+    WorktreeBaseChanged(String),
     PromptEdit(text_editor::Action),
     // edit actions
     SaveClicked,
@@ -307,6 +316,7 @@ enum Message {
     CancelDelete,
     RunNowClicked,
     RunFinished,
+    AbortRun(i64),
     // history
     RefreshHistory,
     RunSelected(i64),
@@ -335,6 +345,7 @@ struct Boot {
     tasks: Vec<Task>,
     settings: Settings,
     models: Vec<String>,
+    cancel_registry: CancelRegistry,
 }
 
 fn boot() -> anyhow::Result<Boot> {
@@ -375,12 +386,16 @@ fn boot() -> anyhow::Result<Boot> {
     let db_path = PathBuf::from("data").join("runs.db");
     let db = Db::open(&db_path).context("opening db")?;
 
+    let cancel_registry = runner::new_cancel_registry();
+
     // Bootstrap the scheduler exactly like the egui binary used to. Leak the
     // scheduler — it's a fire-and-forget background actor for the program's
-    // lifetime, the UI never touches it after registration.
+    // lifetime, the UI never touches it after registration. Share the cancel
+    // registry so scheduler-triggered runs are also Stop-able from the GUI.
+    let sched_registry = cancel_registry.clone();
     handle.block_on(async {
         let repaint = Arc::new(Notify::new());
-        let sched = Scheduler::new(cli.clone(), db.clone(), repaint).await?;
+        let sched = Scheduler::new(cli.clone(), db.clone(), repaint, sched_registry).await?;
         for t in &tasks_file.tasks {
             sched.register(t.clone()).await?;
         }
@@ -396,6 +411,7 @@ fn boot() -> anyhow::Result<Boot> {
         tasks,
         settings,
         models,
+        cancel_registry,
     })
 }
 
@@ -423,6 +439,7 @@ impl App {
             show_settings: false,
             settings_input,
             settings_dirty: false,
+            cancel_registry: boot.cancel_registry,
         };
         if let Some(id) = &selected_task {
             app.load_edit_from_id(id);
@@ -475,6 +492,7 @@ impl App {
         };
         self.edit.f_skip_perms = t.dangerously_skip_permissions;
         self.edit.f_run_in_worktree = t.run_in_worktree;
+        self.edit.f_worktree_base = t.worktree_base.clone().unwrap_or_default();
         self.edit.f_enabled = t.enabled;
         self.edit.prompt = text_editor::Content::with_text(&t.prompt);
     }
@@ -544,6 +562,10 @@ impl App {
             prompt: self.edit.prompt.text(),
             dangerously_skip_permissions: self.edit.f_skip_perms,
             run_in_worktree: self.edit.f_run_in_worktree,
+            worktree_base: {
+                let t = self.edit.f_worktree_base.trim();
+                if t.is_empty() { None } else { Some(t.to_string()) }
+            },
             enabled: self.edit.f_enabled,
         }
     }
@@ -571,6 +593,28 @@ impl App {
         let runs = self.db.list_recent_for_task(&id, 200).unwrap_or_default();
         self.history.runs = runs;
         self.history.loaded_for = Some(id);
+        // Refresh events + conversation for whichever run is currently selected
+        // so the timeline keeps in sync with status changes (e.g. running -> ok)
+        // and the user sees newly-written messages land while opencode is still
+        // working. The convo reload no-ops when the run has settled.
+        if let Some(rid) = self.history.selected {
+            self.load_events_for(rid);
+            self.load_convo_for(rid);
+        }
+    }
+
+    fn load_events_for(&mut self, run_id: i64) {
+        match self.db.list_events_for_run(run_id) {
+            Ok(events) => {
+                self.history.events = events;
+                self.history.events_for = Some(run_id);
+            }
+            Err(e) => {
+                tracing::warn!(run = run_id, "failed to load events: {e:#}");
+                self.history.events.clear();
+                self.history.events_for = Some(run_id);
+            }
+        }
     }
 
     fn load_convo_for(&mut self, run_id: i64) {
@@ -584,7 +628,11 @@ impl App {
                 Some("This run has no session id (opencode call may not have succeeded yet).".into());
             return;
         };
-        if self.history.convo_session.as_deref() == Some(&sid) {
+        // Skip the disk read only when (a) we've already loaded this session and
+        // (b) the run is settled — running runs get rescanned on every poll so
+        // newly-written tool calls + assistant messages surface live.
+        let sid_changed = self.history.convo_session.as_deref() != Some(&sid);
+        if !sid_changed && run.status != "running" {
             return;
         }
         match storage::load_conversation(&sid) {
@@ -592,7 +640,12 @@ impl App {
                 self.history.convo = c;
                 self.history.convo_session = Some(sid);
                 self.history.convo_error = None;
-                self.history.expanded.clear();
+                // Only reset which messages are expanded when the user is
+                // looking at a different session. Re-reading the same running
+                // session must not collapse panels the user just opened.
+                if sid_changed {
+                    self.history.expanded.clear();
+                }
             }
             Err(e) => {
                 self.history.convo.clear();
@@ -718,6 +771,7 @@ fn make_new_task(existing: &[Task]) -> Task {
         prompt: String::new(),
         dangerously_skip_permissions: false,
         run_in_worktree: false,
+        worktree_base: None,
         enabled: true,
     }
 }
@@ -741,6 +795,8 @@ impl App {
                     self.history.convo.clear();
                     self.history.convo_session = None;
                     self.history.convo_error = None;
+                    self.history.events.clear();
+                    self.history.events_for = None;
                 }
             }
             Message::NewClicked => {
@@ -796,6 +852,7 @@ impl App {
             Message::EnabledToggled(b) => { self.edit.f_enabled = b; self.edit.dirty = true; }
             Message::SkipPermsToggled(b) => { self.edit.f_skip_perms = b; self.edit.dirty = true; }
             Message::RunInWorktreeToggled(b) => { self.edit.f_run_in_worktree = b; self.edit.dirty = true; }
+            Message::WorktreeBaseChanged(s) => { self.edit.f_worktree_base = s; self.edit.dirty = true; }
             Message::PromptEdit(action) => {
                 let is_edit = matches!(action, text_editor::Action::Edit(_));
                 self.edit.prompt.perform(action);
@@ -836,10 +893,32 @@ impl App {
             Message::ConfirmDelete => self.handle_delete(),
             Message::RunNowClicked => return self.handle_run_now(),
             Message::RunFinished => self.load_runs_for_selected(),
+            Message::AbortRun(rid) => {
+                let token = self
+                    .cancel_registry
+                    .lock()
+                    .unwrap()
+                    .get(&rid)
+                    .cloned();
+                if let Some(t) = token {
+                    t.cancel();
+                    self.set_status(StatusKind::Warn, format!("Aborting run #{rid}…"));
+                } else {
+                    // Race: the run finished between the click and the lookup,
+                    // or it was already aborted. Either way the row will reflect
+                    // the real state on the next poll — just refresh.
+                    self.set_status(
+                        StatusKind::Info,
+                        format!("Run #{rid} already finished."),
+                    );
+                    self.load_runs_for_selected();
+                }
+            }
             Message::RefreshHistory => self.load_runs_for_selected(),
             Message::RunSelected(id) => {
                 self.history.selected = Some(id);
                 self.load_convo_for(id);
+                self.load_events_for(id);
             }
             Message::ToggleExpanded(id) => {
                 if !self.history.expanded.remove(&id) {
@@ -1029,13 +1108,20 @@ impl App {
         };
         self.set_status(StatusKind::Info, format!("Triggered `{}`…", task.name));
 
+        // Jump straight to History so the user watches steps fill in rather than
+        // staring at the Edit form. The 1Hz poll will surface the new running
+        // row within a beat; user can click it to see the timeline detail.
+        self.sub_tab = SubTab::History;
+        self.load_runs_for_selected();
+
         let cli = self.cli.clone();
         let db = self.db.clone();
         let rt = self.rt.clone();
+        let registry = self.cancel_registry.clone();
         iced::Task::perform(
             async move {
                 let _ = rt
-                    .spawn(async move { runner::execute(&task, &cli, &db).await })
+                    .spawn(async move { runner::execute(&task, &cli, &db, &registry).await })
                     .await;
             },
             |_| Message::RunFinished,
@@ -1416,7 +1502,11 @@ impl App {
             .on_toggle(Message::SkipPermsToggled)
             .style(checkbox_style),
             perms_warning(self.edit.f_skip_perms),
-            worktree_section(&self.edit.f_working_dir, self.edit.f_run_in_worktree),
+            worktree_section(
+                &self.edit.f_working_dir,
+                self.edit.f_run_in_worktree,
+                &self.edit.f_worktree_base,
+            ),
         ];
 
         let prompt_block = column![
@@ -1535,6 +1625,13 @@ impl App {
 
         // Run meta header
         let (status_color, status_label) = run_status_style(&run.status);
+        let stop_btn: Element<_> = if run.status == "running" {
+            danger_icon_button(ICON_X, "Stop")
+                .on_press(Message::AbortRun(run.id))
+                .into()
+        } else {
+            Space::with_width(0).into()
+        };
         let mut header = column![
             row![
                 text(format!("Run #{}", run.id))
@@ -1543,6 +1640,8 @@ impl App {
                     .font(bold()),
                 Space::with_width(8),
                 chip(status_label, status_color),
+                Space::with_width(Length::Fill),
+                stop_btn,
             ]
             .align_y(Vertical::Center),
             Space::with_height(6),
@@ -1559,6 +1658,14 @@ impl App {
         if let Some(err) = &run.error {
             col = col.push(Space::with_height(8));
             col = col.push(error_card(err));
+        }
+
+        // Steps timeline — only when events have been loaded for this run.
+        // Lets the user see fetch / verify / opencode / cleanup land live
+        // rather than wonder whether anything's happening.
+        if self.history.events_for == Some(run.id) && !self.history.events.is_empty() {
+            col = col.push(Space::with_height(14));
+            col = col.push(steps_panel(&self.history.events));
         }
 
         col = col.push(Space::with_height(10));
@@ -1770,6 +1877,7 @@ fn run_status_style(s: &str) -> (Color, &'static str) {
         "ok" => (SUCCESS, "ok"),
         "error" => (ERROR, "error"),
         "running" => (INFO, "running"),
+        "aborted" => (TEXT_MUTED, "aborted"),
         _ => (TEXT_FAINT, "?"),
     }
 }
@@ -1838,6 +1946,81 @@ fn run_row(r: &Run, selected: bool) -> Element<Message> {
         .on_press(Message::RunSelected(id))
         .interaction(iced::mouse::Interaction::Pointer)
         .into()
+}
+
+/// Render the per-step timeline above the conversation. Each event shows a
+/// status icon, name, message (when present), and elapsed time.
+fn steps_panel<'a>(events: &[RunEvent]) -> Element<'a, Message> {
+    let mut col = column![
+        text("Steps")
+            .size(13)
+            .style(|_| text::Style { color: Some(TEXT_MUTED) })
+            .font(bold()),
+        Space::with_height(8),
+    ];
+    for e in events {
+        col = col.push(step_row(e));
+        col = col.push(Space::with_height(4));
+    }
+    container(col)
+        .padding(Padding { left: 12.0, right: 12.0, top: 10.0, bottom: 8.0 })
+        .width(Length::Fill)
+        .style(|_| container::Style {
+            background: Some(Background::Color(SURFACE_2)),
+            border: Border { color: BORDER_C, width: 1.0, radius: Radius::new(RADIUS_SM) },
+            ..Default::default()
+        })
+        .into()
+}
+
+fn step_row<'a>(e: &RunEvent) -> Element<'a, Message> {
+    let (color, icon_bytes, label) = match e.status.as_str() {
+        "ok" => (SUCCESS, ICON_CHECK, "ok"),
+        "error" => (ERROR, ICON_X, "error"),
+        "aborted" => (TEXT_MUTED, ICON_X, "aborted"),
+        "running" => (INFO, ICON_CIRCLE, "running"),
+        _ => (TEXT_FAINT, ICON_CIRCLE, "?"),
+    };
+    let _ = label;
+
+    let elapsed = step_elapsed_label(e);
+
+    let mut content = column![row![
+        icon_svg(icon_bytes, 13.0, color),
+        Space::with_width(8),
+        text(e.name.clone())
+            .size(13)
+            .style(|_| text::Style { color: Some(TEXT_C) }),
+        Space::with_width(Length::Fill),
+        text(elapsed).size(12).style(|_| text::Style { color: Some(TEXT_FAINT) }),
+    ]
+    .align_y(Vertical::Center)];
+
+    if let Some(m) = &e.message {
+        if !m.trim().is_empty() {
+            content = content.push(Space::with_height(2));
+            content = content.push(
+                row![
+                    Space::with_width(21), // align under the name (icon 13 + gap 8)
+                    text(m.clone())
+                        .size(12)
+                        .style(move |_| text::Style { color: Some(rgba(color, 0.85)) }),
+                ]
+                .align_y(Vertical::Top),
+            );
+        }
+    }
+
+    content.into()
+}
+
+fn step_elapsed_label(e: &RunEvent) -> String {
+    let end = e.finished_at.unwrap_or_else(Utc::now);
+    let secs = (end - e.started_at).num_seconds().max(0);
+    let suffix = if e.finished_at.is_none() { "…" } else { "" };
+    if secs < 60 { format!("{secs}s{suffix}") }
+    else if secs < 3600 { format!("{}m {}s{}", secs / 60, secs % 60, suffix) }
+    else { format!("{}h {}m{}", secs / 3600, (secs % 3600) / 60, suffix) }
 }
 
 fn meta_row<'a>(label: &str, value: &str) -> Element<'a, Message> {
@@ -2541,13 +2724,48 @@ fn perms_warning(on: bool) -> Element<'static, Message> {
     .into()
 }
 
-fn worktree_section(working_dir: &str, on: bool) -> Element<'static, Message> {
+fn worktree_section<'a>(
+    working_dir: &str,
+    on: bool,
+    base: &'a str,
+) -> Element<'a, Message> {
     // Only surface this option for git repos — for everything else, hiding it
     // keeps the form uncluttered.
     let dir = working_dir.trim();
     if dir.is_empty() || !runner::is_git_repo(Path::new(dir)) {
         return Space::with_height(0).into();
     }
+    let extras: Element<_> = if on {
+        column![
+            Space::with_height(10),
+            form_label("Base ref (empty = current HEAD)"),
+            text_input("origin/main", base)
+                .on_input(Message::WorktreeBaseChanged)
+                .padding(8)
+                .style(text_input_style),
+            Space::with_height(8),
+            row![
+                Space::with_width(4),
+                icon_svg(ICON_INFO, 13.0, INFO),
+                Space::with_width(6),
+                text(
+                    "A detached worktree is created in your temp dir, opencode runs there, then \
+                     the worktree is removed. With a base set, `git fetch --all` runs first to \
+                     refresh remote refs and the base must resolve to a commit — any failure \
+                     aborts the run. If the repo has a `.worktreeinclude` file, git-ignored \
+                     entries listed in it (e.g. `.env`) are copied in; tracked files are never \
+                     clobbered.",
+                )
+                .size(12)
+                .style(|_| text::Style { color: Some(TEXT_MUTED) }),
+            ]
+            .align_y(Vertical::Top),
+        ]
+        .into()
+    } else {
+        Space::with_height(0).into()
+    };
+
     column![
         Space::with_height(10),
         checkbox(
@@ -2560,26 +2778,7 @@ fn worktree_section(working_dir: &str, on: bool) -> Element<'static, Message> {
         )
         .on_toggle(Message::RunInWorktreeToggled)
         .style(checkbox_style),
-        if on {
-            Element::from(
-                row![
-                    Space::with_width(4),
-                    icon_svg(ICON_INFO, 13.0, INFO),
-                    Space::with_width(6),
-                    text(
-                        "A detached worktree is created from HEAD in your temp dir, opencode runs \
-                         there, then the worktree and its directory are removed. If the repo has a \
-                         `.worktreeinclude` file, git-ignored entries listed in it (e.g. `.env`) are \
-                         copied into the worktree before the run; tracked files are never clobbered.",
-                    )
-                    .size(12)
-                    .style(|_| text::Style { color: Some(TEXT_MUTED) }),
-                ]
-                .align_y(Vertical::Center),
-            )
-        } else {
-            Element::from(Space::with_height(0))
-        },
+        extras,
     ]
     .into()
 }
@@ -2794,10 +2993,13 @@ fn subscription(state: &App) -> Subscription<Message> {
             _ => None,
         }),
     ];
-    // While viewing History, poll every 2s so scheduler-triggered runs show up
-    // without needing the user to mash Refresh.
+    // While viewing History, poll every 5s. Each tick refreshes the runs list,
+    // the selected run's events (Steps panel), and — for runs still in flight —
+    // re-reads opencode's storage so newly-written messages / tool calls land
+    // in the conversation view without the user clicking around. 5s is plenty
+    // since opencode writes at message granularity, not at token level.
     if state.sub_tab == SubTab::History {
-        subs.push(time::every(Duration::from_secs(2)).map(|_| Message::RefreshHistory));
+        subs.push(time::every(Duration::from_secs(5)).map(|_| Message::RefreshHistory));
     }
     Subscription::batch(subs)
 }
@@ -2841,6 +3043,7 @@ impl Boot {
             tasks: self.tasks.clone(),
             settings: self.settings.clone(),
             models: self.models.clone(),
+            cancel_registry: self.cancel_registry.clone(),
         }
     }
 }
