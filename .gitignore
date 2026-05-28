@@ -1,0 +1,8 @@
+/target
+/data
+tasks.toml
+Cargo.lock
+
+# Python bytecode (from .claude/skills/* scripts)
+__pycache__/
+*.pyc

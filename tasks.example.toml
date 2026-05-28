@@ -1,0 +1,34 @@
+# 複製成 tasks.toml 後編輯。每個 [[task]] 區塊定義一個排程任務。
+#
+# 排程格式（schedule）：
+#   cron:<Quartz cron 表達式>   非傳統 Unix 5 欄位！是 Quartz 6 欄位：
+#                                  秒 分 時 日 月 週幾  （可選第 7 欄：年）
+#                              day-of-month 與 day-of-week 不能兩個都指定具體值，
+#                              閒置的那個請用 `?`。
+#                              範例：
+#                                "cron:0 0 9 ? * MON-FRI"   週一到五 09:00:00
+#                                "cron:0 */15 * ? * *"      每 15 分鐘
+#                                "cron:0 0 0 1 * ?"         每月 1 號午夜
+#   once:<RFC3339 時間>          例如 "once:2026-05-28T09:00:00Z"
+#   manual                       只能用 GUI 的 Run now 觸發
+
+[[task]]
+id = "daily-codereview"
+name = "每日 code review"
+schedule = "cron:0 0 9 ? * MON-FRI"
+working_dir = "D:/projects/foo"
+# model = "anthropic/claude-sonnet-4-6"   # 留空交給 opencode 預設（會用你 opencode config 的設定）
+prompt = """
+檢查 working_dir 的 `git diff HEAD~1`，
+找出潛在問題並以 bullet point 列出修補建議。
+"""
+dangerously_skip_permissions = true
+enabled = true
+
+[[task]]
+id = "test-once"
+name = "一次性測試任務"
+schedule = "manual"
+working_dir = "D:/shonCloud/opencdoe_orchestrator"
+prompt = "你好，請回應一句話確認你能執行。"
+enabled = true
