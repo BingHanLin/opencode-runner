@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Timelike, Utc};
 use iced::{
     Background, Border, Color, Element, Font, Length, Padding, Shadow, Subscription, Theme,
     alignment::{Horizontal, Vertical},
@@ -145,6 +145,18 @@ struct StatusMessage {
     at: Instant,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+enum CronPreset {
+    Hourly,    // every hour at :M
+    #[default]
+    Daily,     // every day at H:M
+    Weekly,    // every <DOW> at H:M
+    Monthly,   // every D of month at H:M
+    Custom,    // raw cron expression
+}
+
+const DOW_OPTIONS: [&str; 7] = ["MON", "TUE", "WED", "THU", "FRI", "SAT", "SUN"];
+
 struct EditState {
     loaded_id: Option<String>,
     dirty: bool,
@@ -153,13 +165,23 @@ struct EditState {
 
     f_name: String,
     f_kind: ScheduleKind,
-    f_schedule: String,
     f_working_dir: String,
     f_model: Option<String>,
     f_skip_perms: bool,
     f_enabled: bool,
 
     prompt: text_editor::Content,
+
+    // Once picker (UTC):  YYYY-MM-DD  +  HH:MM
+    once_date: String,
+    once_time: String,
+
+    // Cron picker
+    cron_preset: CronPreset,
+    cron_time: String,   // "HH:MM" — used by Hourly (minute only), Daily/Weekly/Monthly
+    cron_dow: String,    // one of DOW_OPTIONS (Weekly)
+    cron_day: String,    // 1..=31 (Monthly)
+    cron_raw: String,    // raw 6-field expression (Custom)
 }
 impl Default for EditState {
     fn default() -> Self {
@@ -170,13 +192,49 @@ impl Default for EditState {
             pending_delete: false,
             f_name: String::new(),
             f_kind: ScheduleKind::Manual,
-            f_schedule: String::new(),
             f_working_dir: String::new(),
             f_model: None,
             f_skip_perms: false,
             f_enabled: true,
             prompt: text_editor::Content::new(),
+            once_date: default_once_date(),
+            once_time: "09:00".into(),
+            cron_preset: CronPreset::Daily,
+            cron_time: "09:00".into(),
+            cron_dow: "MON".into(),
+            cron_day: "1".into(),
+            cron_raw: "0 0 9 * * *".into(),
         }
+    }
+}
+
+fn default_once_date() -> String {
+    // Default to "tomorrow" in UTC so the placeholder is always in the future.
+    let dt = chrono::Utc::now() + chrono::Duration::days(1);
+    dt.format("%Y-%m-%d").to_string()
+}
+
+impl EditState {
+    /// Extract just the minute part of `cron_time` as a string for the Hourly
+    /// picker. Stored as a full `HH:MM` so assemble_cron_expr can read it
+    /// uniformly across all presets.
+    fn cron_time_minute_only(&self) -> String {
+        self.cron_time
+            .split_once(':')
+            .map(|(_, m)| m.to_string())
+            .unwrap_or_else(|| "0".into())
+    }
+}
+
+impl std::fmt::Display for CronPreset {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(match self {
+            CronPreset::Hourly => "Hourly",
+            CronPreset::Daily => "Daily",
+            CronPreset::Weekly => "Weekly",
+            CronPreset::Monthly => "Monthly",
+            CronPreset::Custom => "Custom",
+        })
     }
 }
 
@@ -218,7 +276,15 @@ enum Message {
     // edit form
     NameChanged(String),
     KindChanged(ScheduleKind),
-    ScheduleExprChanged(String),
+    // Once picker
+    OnceDateChanged(String),
+    OnceTimeChanged(String),
+    // Cron picker
+    CronPresetChanged(CronPreset),
+    CronTimeChanged(String),
+    CronDowChanged(String),
+    CronDayChanged(String),
+    CronRawChanged(String),
     WorkingDirChanged(String),
     BrowseClicked,
     BrowsePicked(Option<PathBuf>),
@@ -328,6 +394,17 @@ impl App {
 
     fn load_edit_from_id(&mut self, task_id: &str) {
         let Some(t) = self.tasks.iter().find(|t| t.id == task_id) else { return };
+        // Reset picker fields to their defaults so leftover state from a prior
+        // task doesn't bleed in when the next task is Manual / Custom etc.
+        let defaults = EditState::default();
+        self.edit.once_date = defaults.once_date;
+        self.edit.once_time = defaults.once_time;
+        self.edit.cron_preset = defaults.cron_preset;
+        self.edit.cron_time = defaults.cron_time;
+        self.edit.cron_dow = defaults.cron_dow;
+        self.edit.cron_day = defaults.cron_day;
+        self.edit.cron_raw = defaults.cron_raw;
+
         self.edit.loaded_id = Some(t.id.clone());
         self.edit.dirty = false;
         self.edit.validation = None;
@@ -335,7 +412,23 @@ impl App {
         self.edit.f_name = t.name.clone();
         let (kind, expr) = split_schedule(&t.schedule);
         self.edit.f_kind = kind;
-        self.edit.f_schedule = expr;
+        match kind {
+            ScheduleKind::Once => {
+                if let Some((d, t)) = parse_once_expr(&expr) {
+                    self.edit.once_date = d;
+                    self.edit.once_time = t;
+                }
+            }
+            ScheduleKind::Cron => {
+                let parsed = parse_cron_expr(&expr);
+                self.edit.cron_preset = parsed.preset;
+                if let Some(t) = parsed.time { self.edit.cron_time = t; }
+                if let Some(d) = parsed.dow { self.edit.cron_dow = d; }
+                if let Some(d) = parsed.day { self.edit.cron_day = d; }
+                self.edit.cron_raw = expr.clone();
+            }
+            ScheduleKind::Manual => {}
+        }
         self.edit.f_working_dir = t.working_dir.to_string_lossy().into_owned();
         self.edit.f_model = if t.model.as_deref().map(str::is_empty).unwrap_or(true) {
             None
@@ -358,8 +451,47 @@ impl App {
     fn assemble_schedule(&self) -> String {
         match self.edit.f_kind {
             ScheduleKind::Manual => "manual".into(),
-            ScheduleKind::Cron => format!("cron:{}", self.edit.f_schedule.trim()),
-            ScheduleKind::Once => format!("once:{}", self.edit.f_schedule.trim()),
+            ScheduleKind::Cron => format!("cron:{}", self.assemble_cron_expr()),
+            ScheduleKind::Once => format!("once:{}", self.assemble_once_expr()),
+        }
+    }
+
+    fn assemble_once_expr(&self) -> String {
+        // YYYY-MM-DD + HH:MM (UTC) -> RFC3339 with `Z`.
+        // Build with chrono so we get strict validation; if the user typed
+        // something invalid we still emit a string and let save's parse_schedule
+        // surface the error.
+        use chrono::{NaiveDate, NaiveTime, TimeZone};
+        let d = NaiveDate::parse_from_str(self.edit.once_date.trim(), "%Y-%m-%d");
+        let t = NaiveTime::parse_from_str(self.edit.once_time.trim(), "%H:%M")
+            .or_else(|_| NaiveTime::parse_from_str(self.edit.once_time.trim(), "%H:%M:%S"));
+        match (d, t) {
+            (Ok(d), Ok(t)) => chrono::Utc
+                .from_utc_datetime(&d.and_time(t))
+                .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+            _ => format!(
+                "{}T{}:00Z",
+                self.edit.once_date.trim(),
+                self.edit.once_time.trim()
+            ),
+        }
+    }
+
+    fn assemble_cron_expr(&self) -> String {
+        use chrono::NaiveTime;
+        let (h, m) = NaiveTime::parse_from_str(self.edit.cron_time.trim(), "%H:%M")
+            .map(|t| (t.hour() as u8, t.minute() as u8))
+            .unwrap_or((9, 0));
+        match self.edit.cron_preset {
+            // 6-field Quartz: sec min hour day mon dow
+            CronPreset::Hourly => format!("0 {m} * * * *"),
+            CronPreset::Daily => format!("0 {m} {h} * * *"),
+            CronPreset::Weekly => format!("0 {m} {h} ? * {}", self.edit.cron_dow),
+            CronPreset::Monthly => {
+                let d: u8 = self.edit.cron_day.trim().parse().unwrap_or(1).clamp(1, 31);
+                format!("0 {m} {h} {d} * *")
+            }
+            CronPreset::Custom => self.edit.cron_raw.trim().to_string(),
         }
     }
 
@@ -443,6 +575,86 @@ fn split_schedule(s: &str) -> (ScheduleKind, String) {
     (ScheduleKind::Manual, String::new())
 }
 
+/// Parse a stored `once:<RFC3339>` expression (no prefix) back into UI fields:
+/// `YYYY-MM-DD` and `HH:MM`, both in UTC.
+fn parse_once_expr(expr: &str) -> Option<(String, String)> {
+    let dt = chrono::DateTime::parse_from_rfc3339(expr.trim()).ok()?;
+    let utc = dt.with_timezone(&chrono::Utc);
+    Some((
+        utc.format("%Y-%m-%d").to_string(),
+        utc.format("%H:%M").to_string(),
+    ))
+}
+
+struct ParsedCron {
+    preset: CronPreset,
+    time: Option<String>,
+    dow: Option<String>,
+    day: Option<String>,
+}
+
+/// Heuristic-match a stored 6-field cron expression onto our preset enum.
+/// Anything that doesn't match a clean pattern falls through as `Custom` so
+/// the user can edit the raw expression.
+fn parse_cron_expr(expr: &str) -> ParsedCron {
+    let parts: Vec<&str> = expr.split_whitespace().collect();
+    let make_time = |h: &str, m: &str| -> Option<String> {
+        let h: u8 = h.parse().ok()?;
+        let m: u8 = m.parse().ok()?;
+        if h < 24 && m < 60 {
+            Some(format!("{h:02}:{m:02}"))
+        } else {
+            None
+        }
+    };
+
+    if parts.len() == 6 && parts[0] == "0" {
+        let (sec, min, hour, day, mon, dow) =
+            (parts[0], parts[1], parts[2], parts[3], parts[4], parts[5]);
+        let _ = sec; // unused — already required to be "0"
+        // Hourly:  0 <min> * * * *
+        if hour == "*" && day == "*" && mon == "*" && dow == "*" {
+            if let Some(t) = make_time("0", min) {
+                return ParsedCron { preset: CronPreset::Hourly, time: Some(t), dow: None, day: None };
+            }
+        }
+        // Daily:  0 <min> <hour> * * *
+        if day == "*" && mon == "*" && dow == "*" {
+            if let Some(t) = make_time(hour, min) {
+                return ParsedCron { preset: CronPreset::Daily, time: Some(t), dow: None, day: None };
+            }
+        }
+        // Weekly: 0 <min> <hour> ? * <DOW>
+        if day == "?" && mon == "*" {
+            let dow_upper = dow.to_ascii_uppercase();
+            if DOW_OPTIONS.iter().any(|d| *d == dow_upper.as_str()) {
+                if let Some(t) = make_time(hour, min) {
+                    return ParsedCron {
+                        preset: CronPreset::Weekly,
+                        time: Some(t),
+                        dow: Some(dow_upper),
+                        day: None,
+                    };
+                }
+            }
+        }
+        // Monthly: 0 <min> <hour> <day> * *
+        if mon == "*" && dow == "*" {
+            if let (Ok(d), Some(t)) = (day.parse::<u8>(), make_time(hour, min)) {
+                if (1..=31).contains(&d) {
+                    return ParsedCron {
+                        preset: CronPreset::Monthly,
+                        time: Some(t),
+                        dow: None,
+                        day: Some(d.to_string()),
+                    };
+                }
+            }
+        }
+    }
+    ParsedCron { preset: CronPreset::Custom, time: None, dow: None, day: None }
+}
+
 fn make_new_task(existing: &[Task]) -> Task {
     let mut n = 1;
     let name = loop {
@@ -511,7 +723,30 @@ impl App {
                     self.edit.dirty = true;
                 }
             }
-            Message::ScheduleExprChanged(s) => { self.edit.f_schedule = s; self.edit.dirty = true; }
+            Message::OnceDateChanged(s) => { self.edit.once_date = s; self.edit.dirty = true; }
+            Message::OnceTimeChanged(s) => { self.edit.once_time = s; self.edit.dirty = true; }
+            Message::CronPresetChanged(p) => {
+                if self.edit.cron_preset != p {
+                    // When entering Custom for the first time, seed the raw
+                    // field with the expression that would have been built
+                    // from the previous preset so the user has something to
+                    // edit instead of an empty string.
+                    if p == CronPreset::Custom && self.edit.cron_raw.trim().is_empty() {
+                        self.edit.cron_raw = self.assemble_cron_expr();
+                    }
+                    self.edit.cron_preset = p;
+                    self.edit.dirty = true;
+                }
+            }
+            Message::CronTimeChanged(s) => { self.edit.cron_time = s; self.edit.dirty = true; }
+            Message::CronDowChanged(s) => { self.edit.cron_dow = s; self.edit.dirty = true; }
+            Message::CronDayChanged(s) => {
+                // Only accept digits, clamp to 1..=31 on input
+                let cleaned: String = s.chars().filter(|c| c.is_ascii_digit()).take(2).collect();
+                self.edit.cron_day = cleaned;
+                self.edit.dirty = true;
+            }
+            Message::CronRawChanged(s) => { self.edit.cron_raw = s; self.edit.dirty = true; }
             Message::WorkingDirChanged(s) => { self.edit.f_working_dir = s; self.edit.dirty = true; }
             Message::ModelChanged(m) => { self.edit.f_model = m; self.edit.dirty = true; }
             Message::EnabledToggled(b) => { self.edit.f_enabled = b; self.edit.dirty = true; }
@@ -838,7 +1073,7 @@ impl App {
             section("Schedule"),
             schedule_kind_picker(self.edit.f_kind),
             Space::with_height(10),
-            schedule_body(self.edit.f_kind, &self.edit.f_schedule),
+            schedule_body(&self.edit),
         ];
 
         let exec = column![
@@ -1764,38 +1999,229 @@ fn schedule_kind_picker(current: ScheduleKind) -> Element<'static, Message> {
     .into()
 }
 
-fn schedule_body<'a>(kind: ScheduleKind, expr: &'a str) -> Element<'a, Message> {
-    match kind {
+fn schedule_body<'a>(edit: &'a EditState) -> Element<'a, Message> {
+    match edit.f_kind {
         ScheduleKind::Manual => text(
             "Manual tasks only run when you click Run now or trigger them externally.",
         )
         .size(12)
         .style(|_| text::Style { color: Some(TEXT_MUTED) })
         .into(),
-        ScheduleKind::Cron => column![
-            text_input("0 0 9 ? * MON-FRI", expr)
-                .on_input(Message::ScheduleExprChanged)
-                .padding(8)
-                .style(text_input_style),
-            Space::with_height(4),
-            text(
-                "6-field Quartz cron: sec min hour day mon dow.  Example: 0 0 9 ? * MON-FRI (weekdays 09:00).",
-            )
-            .size(12)
-            .style(|_| text::Style { color: Some(TEXT_FAINT) }),
+        ScheduleKind::Once => once_picker(edit),
+        ScheduleKind::Cron => cron_picker(edit),
+    }
+}
+
+fn once_picker(edit: &EditState) -> Element<Message> {
+    use chrono::{NaiveDate, NaiveTime};
+    let date_ok = NaiveDate::parse_from_str(edit.once_date.trim(), "%Y-%m-%d").is_ok();
+    let time_ok = NaiveTime::parse_from_str(edit.once_time.trim(), "%H:%M").is_ok();
+
+    let date_field = labelled(
+        "Date (UTC)",
+        text_input("YYYY-MM-DD", &edit.once_date)
+            .on_input(Message::OnceDateChanged)
+            .padding(8)
+            .width(Length::Fixed(160.0))
+            .style(if date_ok { text_input_style } else { text_input_style_err }),
+    );
+    let time_field = labelled(
+        "Time",
+        text_input("HH:MM", &edit.once_time)
+            .on_input(Message::OnceTimeChanged)
+            .padding(8)
+            .width(Length::Fixed(110.0))
+            .style(if time_ok { text_input_style } else { text_input_style_err }),
+    );
+
+    column![
+        row![date_field, Space::with_width(12), time_field]
+            .align_y(Vertical::Center),
+        Space::with_height(8),
+        preview_line(&assemble_once_preview(edit, date_ok && time_ok)),
+    ]
+    .into()
+}
+
+fn cron_picker(edit: &EditState) -> Element<Message> {
+    use chrono::NaiveTime;
+
+    let preset_picker = pick_list(
+        vec![
+            CronPreset::Hourly,
+            CronPreset::Daily,
+            CronPreset::Weekly,
+            CronPreset::Monthly,
+            CronPreset::Custom,
+        ],
+        Some(edit.cron_preset),
+        Message::CronPresetChanged,
+    )
+    .width(Length::Fixed(140.0))
+    .padding(8)
+    .style(pick_list_style);
+
+    let time_ok = NaiveTime::parse_from_str(edit.cron_time.trim(), "%H:%M").is_ok();
+    let time_field = labelled(
+        "Time (UTC)",
+        text_input("HH:MM", &edit.cron_time)
+            .on_input(Message::CronTimeChanged)
+            .padding(8)
+            .width(Length::Fixed(110.0))
+            .style(if time_ok { text_input_style } else { text_input_style_err }),
+    );
+
+    let minute_only_field = labelled(
+        "Minute",
+        text_input("0", &edit.cron_time_minute_only())
+            .on_input(|s| {
+                let cleaned: String = s.chars().filter(|c| c.is_ascii_digit()).take(2).collect();
+                Message::CronTimeChanged(format!("00:{:0>2}", cleaned))
+            })
+            .padding(8)
+            .width(Length::Fixed(80.0))
+            .style(text_input_style),
+    );
+
+    let dow_field = labelled(
+        "Day of week",
+        pick_list(
+            DOW_OPTIONS.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+            Some(edit.cron_dow.clone()),
+            Message::CronDowChanged,
+        )
+        .width(Length::Fixed(120.0))
+        .padding(8)
+        .style(pick_list_style),
+    );
+
+    let day_field = labelled(
+        "Day of month",
+        text_input("1", &edit.cron_day)
+            .on_input(Message::CronDayChanged)
+            .padding(8)
+            .width(Length::Fixed(80.0))
+            .style(text_input_style),
+    );
+
+    // Sub-row that pairs with the Frequency picker on a single line. For
+    // Custom we instead push a full-width block below.
+    let inline_sub: Option<Element<Message>> = match edit.cron_preset {
+        CronPreset::Hourly => Some(minute_only_field),
+        CronPreset::Daily => Some(time_field),
+        CronPreset::Weekly => Some(
+            row![dow_field, Space::with_width(12), time_field]
+                .align_y(Vertical::Bottom)
+                .into(),
+        ),
+        CronPreset::Monthly => Some(
+            row![day_field, Space::with_width(12), time_field]
+                .align_y(Vertical::Bottom)
+                .into(),
+        ),
+        CronPreset::Custom => None,
+    };
+
+    let top_row: Element<Message> = match inline_sub {
+        Some(sub) => row![
+            labelled("Frequency", preset_picker),
+            Space::with_width(16),
+            sub,
         ]
+        .align_y(Vertical::Bottom)
         .into(),
-        ScheduleKind::Once => column![
-            text_input("2026-05-28T09:00:00Z", expr)
-                .on_input(Message::ScheduleExprChanged)
-                .padding(8)
-                .style(text_input_style),
+        None => labelled("Frequency", preset_picker).into(),
+    };
+
+    let custom_block: Element<Message> = if edit.cron_preset == CronPreset::Custom {
+        column![
+            Space::with_height(12),
+            labelled(
+                "Cron expression",
+                text_input("0 0 9 * * *", &edit.cron_raw)
+                    .on_input(Message::CronRawChanged)
+                    .padding(8)
+                    .style(text_input_style),
+            ),
             Space::with_height(4),
-            text("RFC3339 timestamp (UTC).")
+            text("6-field Quartz cron: sec min hour day mon dow.")
                 .size(12)
                 .style(|_| text::Style { color: Some(TEXT_FAINT) }),
         ]
-        .into(),
+        .into()
+    } else {
+        Space::with_height(0).into()
+    };
+
+    column![
+        top_row,
+        custom_block,
+        Space::with_height(8),
+        preview_line(&assemble_cron_preview(edit)),
+    ]
+    .into()
+}
+
+fn labelled<'a>(
+    label: &'static str,
+    body: impl Into<Element<'a, Message>>,
+) -> Element<'a, Message> {
+    column![
+        text(label).size(11).style(|_| text::Style { color: Some(TEXT_MUTED) }),
+        Space::with_height(4),
+        body.into(),
+    ]
+    .into()
+}
+
+fn preview_line(expr: &str) -> Element<'static, Message> {
+    let s = expr.to_string();
+    row![
+        text("→")
+            .size(12)
+            .style(|_| text::Style { color: Some(TEXT_FAINT) }),
+        Space::with_width(6),
+        text(s)
+            .size(12)
+            .style(|_| text::Style { color: Some(TEXT_MUTED) })
+            .font(Font {
+                family: iced::font::Family::Monospace,
+                ..Font::DEFAULT
+            }),
+    ]
+    .align_y(Vertical::Center)
+    .into()
+}
+
+fn assemble_once_preview(edit: &EditState, ok: bool) -> String {
+    use chrono::{NaiveDate, NaiveTime, TimeZone};
+    if !ok {
+        return "(invalid date or time)".into();
+    }
+    let d = NaiveDate::parse_from_str(edit.once_date.trim(), "%Y-%m-%d").ok();
+    let t = NaiveTime::parse_from_str(edit.once_time.trim(), "%H:%M").ok();
+    match (d, t) {
+        (Some(d), Some(t)) => chrono::Utc
+            .from_utc_datetime(&d.and_time(t))
+            .to_rfc3339_opts(chrono::SecondsFormat::Secs, true),
+        _ => "(invalid)".into(),
+    }
+}
+
+fn assemble_cron_preview(edit: &EditState) -> String {
+    use chrono::NaiveTime;
+    let (h, m) = NaiveTime::parse_from_str(edit.cron_time.trim(), "%H:%M")
+        .map(|t| (t.hour() as u8, t.minute() as u8))
+        .unwrap_or((9, 0));
+    match edit.cron_preset {
+        CronPreset::Hourly => format!("0 {m} * * * *"),
+        CronPreset::Daily => format!("0 {m} {h} * * *"),
+        CronPreset::Weekly => format!("0 {m} {h} ? * {}", edit.cron_dow),
+        CronPreset::Monthly => {
+            let d: u8 = edit.cron_day.trim().parse().unwrap_or(1).clamp(1, 31);
+            format!("0 {m} {h} {d} * *")
+        }
+        CronPreset::Custom => edit.cron_raw.trim().to_string(),
     }
 }
 
@@ -1949,6 +2375,23 @@ fn text_input_style(_t: &Theme, status: text_input::Status) -> text_input::Style
     let border_color = match status {
         text_input::Status::Focused => ACCENT,
         _ => BORDER_C,
+    };
+    text_input::Style {
+        background: Background::Color(SURFACE_2),
+        border: Border { color: border_color, width: 1.0, radius: Radius::new(RADIUS_SM) },
+        icon: TEXT_MUTED,
+        placeholder: TEXT_FAINT,
+        value: TEXT_C,
+        selection: rgba(ACCENT, 0.4),
+    }
+}
+
+/// Same as `text_input_style` but with a red border — used when the field's
+/// content fails to parse so the user gets immediate feedback.
+fn text_input_style_err(_t: &Theme, status: text_input::Status) -> text_input::Style {
+    let border_color = match status {
+        text_input::Status::Focused => ERROR,
+        _ => rgba(ERROR, 0.6),
     };
     text_input::Style {
         background: Background::Color(SURFACE_2),
