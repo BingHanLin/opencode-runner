@@ -23,6 +23,12 @@ pub struct Task {
     pub prompt: String,
     #[serde(default)]
     pub dangerously_skip_permissions: bool,
+    /// When true and `working_dir` is a git repo, the runner creates a
+    /// detached, throwaway worktree, runs opencode there, and tears it down
+    /// after the run completes. Lets parallel/repeated runs avoid mutating
+    /// the user's checkout.
+    #[serde(default)]
+    pub run_in_worktree: bool,
     #[serde(default)]
     pub enabled: bool,
 }

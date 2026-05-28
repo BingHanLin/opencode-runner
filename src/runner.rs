@@ -1,23 +1,48 @@
 use crate::config::Task;
 use crate::db::Db;
 use crate::opencode::Cli;
-use anyhow::Result;
+use anyhow::{anyhow, Result};
+use std::path::{Path, PathBuf};
+use std::process::Stdio;
+use tokio::process::Command;
+
+/// Cheap heuristic so both the UI and the runner agree on what counts as a
+/// git repo. `.git` is either a directory (normal checkout) or a file
+/// (linked worktree); both qualify.
+pub fn is_git_repo(path: &Path) -> bool {
+    path.join(".git").exists()
+}
 
 /// Execute one task via the `opencode run` CLI; log start/finish in db.
 pub async fn execute(task: &Task, cli: &Cli, db: &Db) -> Result<i64> {
     let run_id = db.insert_run_start(&task.id)?;
     tracing::info!(task = %task.id, run_id, "starting task");
 
+    // Optionally swap working_dir for a throwaway git worktree.
+    let worktree = match prepare_worktree(task).await {
+        Ok(w) => w,
+        Err(e) => {
+            let msg = format!("worktree setup failed: {e:#}");
+            db.finish_run(run_id, "error", Some(&msg))?;
+            tracing::error!(task = %task.id, run_id, "{msg}");
+            return Err(e);
+        }
+    };
+    let effective_dir: &Path = worktree
+        .as_ref()
+        .map(|w| w.path.as_path())
+        .unwrap_or(task.working_dir.as_path());
+
     let outcome = cli
         .run_task(
-            &task.working_dir,
+            effective_dir,
             &task.prompt,
             task.model.as_deref(),
             task.dangerously_skip_permissions,
         )
         .await;
 
-    match outcome {
+    let result = match outcome {
         Ok(o) => {
             if let Some(sid) = &o.session_id {
                 let _ = db.set_run_session(run_id, sid, None);
@@ -42,5 +67,189 @@ pub async fn execute(task: &Task, cli: &Cli, db: &Db) -> Result<i64> {
             tracing::error!(task = %task.id, run_id, "task failed to launch: {msg}");
             Err(e)
         }
+    };
+
+    // Tear the worktree down regardless of success/failure. Cleanup errors
+    // are logged but don't override the run's outcome — a dangling worktree
+    // is best-effort cleaned up by `git worktree prune` later.
+    if let Some(w) = worktree {
+        if let Err(e) = w.cleanup().await {
+            tracing::warn!(task = %task.id, "worktree cleanup failed: {e:#}");
+        }
     }
+
+    result
+}
+
+struct WorktreeHandle {
+    repo: PathBuf,
+    path: PathBuf,
+}
+
+impl WorktreeHandle {
+    async fn cleanup(self) -> Result<()> {
+        // `git worktree remove --force` un-registers and deletes the dir.
+        let out = Command::new("git")
+            .arg("-C")
+            .arg(&self.repo)
+            .arg("worktree")
+            .arg("remove")
+            .arg("--force")
+            .arg(&self.path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .output()
+            .await?;
+        if !out.status.success() {
+            tracing::warn!(
+                "git worktree remove failed for {:?}: {}",
+                self.path,
+                String::from_utf8_lossy(&out.stderr).trim()
+            );
+        }
+        // Belt-and-suspenders: if the dir still exists (remove failed, or
+        // opencode left a stray process holding a file), nuke it directly.
+        if self.path.exists() {
+            tokio::fs::remove_dir_all(&self.path).await.ok();
+        }
+        Ok(())
+    }
+}
+
+async fn prepare_worktree(task: &Task) -> Result<Option<WorktreeHandle>> {
+    if !task.run_in_worktree {
+        return Ok(None);
+    }
+    if !is_git_repo(&task.working_dir) {
+        // Configured but not a git repo — fall back to running in-place so a
+        // stale checkbox doesn't break the task entirely. The UI hides the
+        // checkbox for non-git dirs, so this is a "tasks.toml drift" path.
+        tracing::warn!(
+            task = %task.id,
+            "run_in_worktree set but {:?} is not a git repo; running in original directory",
+            task.working_dir
+        );
+        return Ok(None);
+    }
+
+    let tmp = std::env::temp_dir().join(format!(
+        "opencode-orchestrator-wt-{}",
+        uuid::Uuid::new_v4()
+    ));
+    let out = Command::new("git")
+        .arg("-C")
+        .arg(&task.working_dir)
+        .arg("worktree")
+        .arg("add")
+        .arg("--detach")
+        .arg(&tmp)
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .await?;
+    if !out.status.success() {
+        return Err(anyhow!(
+            "git worktree add failed (exit {:?}): {}",
+            out.status.code(),
+            String::from_utf8_lossy(&out.stderr).trim()
+        ));
+    }
+    tracing::info!(task = %task.id, worktree = ?tmp, "created worktree");
+
+    // Best-effort: copy entries listed in `.worktreeinclude`. Failures here
+    // don't fail the run — the worktree itself is usable, the included files
+    // are a convenience. We log every skip/copy decision.
+    if let Err(e) = apply_worktree_include(&task.working_dir, &tmp).await {
+        tracing::warn!(task = %task.id, "applying .worktreeinclude failed: {e:#}");
+    }
+
+    Ok(Some(WorktreeHandle {
+        repo: task.working_dir.clone(),
+        path: tmp,
+    }))
+}
+
+/// Replicate the `.worktreeinclude` convention: copy git-ignored files (and
+/// directories) listed in `<repo>/.worktreeinclude` into the new worktree, so
+/// untracked but locally-essential files (`.env`, `.env.local`, …) are
+/// available without the user having to seed each worktree manually.
+///
+/// Safety rules:
+///   * Only ignored entries are copied. Tracked code is never overwritten.
+///   * Absolute paths and `..` traversal are rejected.
+///   * Missing source entries are skipped silently.
+async fn apply_worktree_include(repo: &Path, worktree: &Path) -> Result<()> {
+    let include_path = repo.join(".worktreeinclude");
+    if !include_path.exists() {
+        return Ok(());
+    }
+    let raw = tokio::fs::read_to_string(&include_path).await?;
+    for line in raw.lines() {
+        let entry = line.trim();
+        if entry.is_empty() || entry.starts_with('#') {
+            continue;
+        }
+        if Path::new(entry).is_absolute()
+            || entry.split(['/', '\\']).any(|c| c == "..")
+        {
+            tracing::warn!(".worktreeinclude: refusing suspicious path {entry:?}");
+            continue;
+        }
+        let src = repo.join(entry);
+        if !src.exists() {
+            tracing::debug!(".worktreeinclude: {entry:?} not present in source; skipping");
+            continue;
+        }
+        if !is_git_ignored(repo, entry).await {
+            tracing::warn!(
+                ".worktreeinclude: {entry:?} is tracked by git; refusing to copy (would clobber tracked code)"
+            );
+            continue;
+        }
+        let dst = worktree.join(entry);
+        let src_owned = src.clone();
+        let dst_owned = dst.clone();
+        let res = tokio::task::spawn_blocking(move || copy_recursive_sync(&src_owned, &dst_owned))
+            .await
+            .map_err(|e| anyhow!("copy task join failed: {e}"))?;
+        match res {
+            Ok(()) => tracing::info!(".worktreeinclude: copied {entry:?}"),
+            Err(e) => tracing::warn!(".worktreeinclude: copying {entry:?} failed: {e}"),
+        }
+    }
+    Ok(())
+}
+
+async fn is_git_ignored(repo: &Path, rel: &str) -> bool {
+    // `git check-ignore -q <path>`: exit 0 = ignored, 1 = not ignored, 128 = error.
+    matches!(
+        Command::new("git")
+            .arg("-C").arg(repo)
+            .arg("check-ignore").arg("-q").arg("--").arg(rel)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .await,
+        Ok(s) if s.success()
+    )
+}
+
+fn copy_recursive_sync(src: &Path, dst: &Path) -> std::io::Result<()> {
+    let meta = std::fs::metadata(src)?;
+    if meta.is_dir() {
+        std::fs::create_dir_all(dst)?;
+        for entry in std::fs::read_dir(src)? {
+            let entry = entry?;
+            copy_recursive_sync(&entry.path(), &dst.join(entry.file_name()))?;
+        }
+    } else {
+        if let Some(parent) = dst.parent() {
+            std::fs::create_dir_all(parent)?;
+        }
+        std::fs::copy(src, dst)?;
+    }
+    Ok(())
 }

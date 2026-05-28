@@ -7,7 +7,7 @@
 //! does — the same tokio runtime model, same on-disk state.
 
 use std::collections::HashSet;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::time::Instant;
 
@@ -168,6 +168,7 @@ struct EditState {
     f_working_dir: String,
     f_model: Option<String>,
     f_skip_perms: bool,
+    f_run_in_worktree: bool,
     f_enabled: bool,
 
     prompt: text_editor::Content,
@@ -195,6 +196,7 @@ impl Default for EditState {
             f_working_dir: String::new(),
             f_model: None,
             f_skip_perms: false,
+            f_run_in_worktree: false,
             f_enabled: true,
             prompt: text_editor::Content::new(),
             once_date: default_once_date(),
@@ -295,6 +297,7 @@ enum Message {
     ModelChanged(Option<String>),
     EnabledToggled(bool),
     SkipPermsToggled(bool),
+    RunInWorktreeToggled(bool),
     PromptEdit(text_editor::Action),
     // edit actions
     SaveClicked,
@@ -471,6 +474,7 @@ impl App {
             t.model.clone()
         };
         self.edit.f_skip_perms = t.dangerously_skip_permissions;
+        self.edit.f_run_in_worktree = t.run_in_worktree;
         self.edit.f_enabled = t.enabled;
         self.edit.prompt = text_editor::Content::with_text(&t.prompt);
     }
@@ -539,6 +543,7 @@ impl App {
             model: self.edit.f_model.clone(),
             prompt: self.edit.prompt.text(),
             dangerously_skip_permissions: self.edit.f_skip_perms,
+            run_in_worktree: self.edit.f_run_in_worktree,
             enabled: self.edit.f_enabled,
         }
     }
@@ -712,6 +717,7 @@ fn make_new_task(existing: &[Task]) -> Task {
         model: None,
         prompt: String::new(),
         dangerously_skip_permissions: false,
+        run_in_worktree: false,
         enabled: true,
     }
 }
@@ -789,6 +795,7 @@ impl App {
             Message::ModelChanged(m) => { self.edit.f_model = m; self.edit.dirty = true; }
             Message::EnabledToggled(b) => { self.edit.f_enabled = b; self.edit.dirty = true; }
             Message::SkipPermsToggled(b) => { self.edit.f_skip_perms = b; self.edit.dirty = true; }
+            Message::RunInWorktreeToggled(b) => { self.edit.f_run_in_worktree = b; self.edit.dirty = true; }
             Message::PromptEdit(action) => {
                 let is_edit = matches!(action, text_editor::Action::Edit(_));
                 self.edit.prompt.perform(action);
@@ -1409,6 +1416,7 @@ impl App {
             .on_toggle(Message::SkipPermsToggled)
             .style(checkbox_style),
             perms_warning(self.edit.f_skip_perms),
+            worktree_section(&self.edit.f_working_dir, self.edit.f_run_in_worktree),
         ];
 
         let prompt_block = column![
@@ -2530,6 +2538,49 @@ fn perms_warning(on: bool) -> Element<'static, Message> {
         text("The agent will not pause for confirmation.").size(12).style(|_| text::Style { color: Some(WARN) }),
     ]
     .align_y(Vertical::Center)
+    .into()
+}
+
+fn worktree_section(working_dir: &str, on: bool) -> Element<'static, Message> {
+    // Only surface this option for git repos — for everything else, hiding it
+    // keeps the form uncluttered.
+    let dir = working_dir.trim();
+    if dir.is_empty() || !runner::is_git_repo(Path::new(dir)) {
+        return Space::with_height(0).into();
+    }
+    column![
+        Space::with_height(10),
+        checkbox(
+            if on {
+                "Run in a throwaway git worktree (cleaned up after each run)"
+            } else {
+                "Run in worktree"
+            },
+            on,
+        )
+        .on_toggle(Message::RunInWorktreeToggled)
+        .style(checkbox_style),
+        if on {
+            Element::from(
+                row![
+                    Space::with_width(4),
+                    icon_svg(ICON_INFO, 13.0, INFO),
+                    Space::with_width(6),
+                    text(
+                        "A detached worktree is created from HEAD in your temp dir, opencode runs \
+                         there, then the worktree and its directory are removed. If the repo has a \
+                         `.worktreeinclude` file, git-ignored entries listed in it (e.g. `.env`) are \
+                         copied into the worktree before the run; tracked files are never clobbered.",
+                    )
+                    .size(12)
+                    .style(|_| text::Style { color: Some(TEXT_MUTED) }),
+                ]
+                .align_y(Vertical::Center),
+            )
+        } else {
+            Element::from(Space::with_height(0))
+        },
+    ]
     .into()
 }
 
