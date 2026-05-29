@@ -1,4 +1,5 @@
 import type { Task } from "../types";
+import { PlusIcon, SettingsIcon } from "./Icon";
 import { ScheduleChip } from "./StatusChip";
 
 interface Props {
@@ -24,8 +25,13 @@ export function Sidebar({
     <aside className="sidebar">
       <div className="sidebar-header">
         <span className="sidebar-title">Tasks · {tasks.length}</span>
-        <button className="btn ghost" onClick={onNew} title="New task">
-          +
+        <button
+          className="btn ghost icon"
+          onClick={onNew}
+          title="New task"
+          aria-label="New task"
+        >
+          <PlusIcon size={16} />
         </button>
       </div>
       <div className="sidebar-body">
@@ -42,11 +48,20 @@ export function Sidebar({
               key={t.id}
               className={`task-row ${activeId === t.id && view === "task" ? "active" : ""}`}
               onClick={() => onSelect(t.id)}
+              role="button"
+              tabIndex={0}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  onSelect(t.id);
+                }
+              }}
             >
               <div className="task-name">
-                {t.name || "(unnamed)"}{" "}
+                <span>{t.name || "(unnamed)"}</span>
                 {runningTaskIds.has(t.id) && (
-                  <span className="chip info" style={{ marginLeft: 6 }}>
+                  <span className="chip info">
+                    <span className="pulse" />
                     running
                   </span>
                 )}
@@ -63,9 +78,10 @@ export function Sidebar({
         <button
           className={`btn ghost ${view === "settings" ? "active" : ""}`}
           onClick={onSettings}
-          style={{ flex: 1 }}
+          style={{ flex: 1, justifyContent: "flex-start" }}
         >
-          ⚙ Settings
+          <SettingsIcon size={15} />
+          Settings
         </button>
       </div>
     </aside>

@@ -2,6 +2,13 @@ import { useEffect, useMemo, useState } from "react";
 import { api, pickDirectory } from "../api";
 import type { Model, Task } from "../types";
 import { parseScheduleKind } from "../types";
+import {
+  AlertIcon,
+  FolderIcon,
+  PlayIcon,
+  SaveIcon,
+  TrashIcon,
+} from "./Icon";
 
 interface Props {
   task: Task;
@@ -59,10 +66,7 @@ export function EditTab({ task, isNew, onSave, onDelete, onRunNow }: Props) {
 
   return (
     <div className="panel">
-      <div
-        className="row"
-        style={{ justifyContent: "space-between", marginBottom: 14 }}
-      >
+      <div className="sticky-bar edit-toolbar">
         <div className="row" style={{ gap: 8 }}>
           <button
             className="btn primary"
@@ -70,6 +74,7 @@ export function EditTab({ task, isNew, onSave, onDelete, onRunNow }: Props) {
             onClick={save}
             title="Ctrl+S"
           >
+            <SaveIcon size={14} />
             {busy ? "Saving…" : "Save"}
           </button>
           {dirty && (
@@ -78,6 +83,7 @@ export function EditTab({ task, isNew, onSave, onDelete, onRunNow }: Props) {
             </button>
           )}
           <button className="btn" disabled={isNew || busy} onClick={onRunNow}>
+            <PlayIcon size={13} />
             Run now
           </button>
         </div>
@@ -101,6 +107,7 @@ export function EditTab({ task, isNew, onSave, onDelete, onRunNow }: Props) {
               disabled={isNew}
               onClick={() => setConfirmDelete(true)}
             >
+              <TrashIcon size={13} />
               Delete
             </button>
           )}
@@ -199,6 +206,7 @@ export function EditTab({ task, isNew, onSave, onDelete, onRunNow }: Props) {
               placeholder="C:/projects/example"
             />
             <button className="btn" onClick={browseWorkingDir}>
+              <FolderIcon size={13} />
               Browse…
             </button>
           </div>
@@ -234,8 +242,17 @@ export function EditTab({ task, isNew, onSave, onDelete, onRunNow }: Props) {
           --dangerously-skip-permissions
         </label>
         {draft.dangerously_skip_permissions && (
-          <div className="warn-text" style={{ marginTop: 4 }}>
-            ⚠ opencode will run without prompting you to allow tool calls.
+          <div
+            className="warn-text"
+            style={{
+              marginTop: 6,
+              display: "inline-flex",
+              alignItems: "center",
+              gap: 6,
+            }}
+          >
+            <AlertIcon size={13} />
+            opencode will run without prompting you to allow tool calls.
           </div>
         )}
 

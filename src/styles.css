@@ -1,29 +1,141 @@
-:root {
-  /* Palette — matched to the Iced port. */
-  --bg: #0b0d12;
-  --surface: #12151d;
-  --surface-2: #161a24;
-  --surface-3: #1c2030;
+/* =============================================================================
+   Design tokens
+   - Two themes: dark (default) and light, swapped by `data-theme` on <html>.
+   - Spacing & radius scales are theme-independent.
+   - Token names match the Iced port so existing component classes can map
+     directly; values were re-tuned for sharper hierarchy and AA contrast.
+   ========================================================================== */
+
+:root,
+:root[data-theme="dark"] {
+  --bg: #0a0c11;
+  --surface: #11141c;
+  --surface-2: #171b25;
+  --surface-3: #1f2432;
+  --surface-overlay: rgba(255, 255, 255, 0.04);
+
   --border: #232936;
   --border-strong: #2e3548;
-  --text: #e8ebf1;
-  --text-muted: #9ba3b4;
-  --text-faint: #60697a;
-  --accent: #8b7cff;
-  --accent-text: #c4bcff;
-  --accent-soft: rgba(139, 124, 255, 0.18);
-  --success: #4ad095;
-  --info: #6fb1fa;
-  --warn: #e5b14f;
-  --error: #ec716d;
+  --border-focus: #6d5fff;
 
-  --radius: 6px;
-  --radius-sm: 4px;
-  --page-pad-x: 24px;
-  --page-pad-y: 18px;
+  --text: #ecf0f7;
+  --text-muted: #98a2b3;
+  --text-faint: #5e6776;
+
+  --accent: #8b7cff;
+  --accent-strong: #a195ff;
+  --accent-text: #c4bcff;
+  --accent-bg: rgba(139, 124, 255, 0.16);
+  --accent-bg-strong: rgba(139, 124, 255, 0.26);
+
+  --success: #4ad095;
+  --success-bg: rgba(74, 208, 149, 0.16);
+  --success-border: rgba(74, 208, 149, 0.32);
+
+  --info: #6fb1fa;
+  --info-bg: rgba(111, 177, 250, 0.16);
+  --info-border: rgba(111, 177, 250, 0.32);
+
+  --warn: #e5b14f;
+  --warn-bg: rgba(229, 177, 79, 0.16);
+  --warn-border: rgba(229, 177, 79, 0.32);
+
+  --error: #ec716d;
+  --error-bg: rgba(236, 113, 109, 0.16);
+  --error-border: rgba(236, 113, 109, 0.34);
+
+  --shadow-sm: 0 1px 2px rgba(0, 0, 0, 0.4);
+  --shadow: 0 4px 16px rgba(0, 0, 0, 0.5);
+  --shadow-strong: 0 8px 28px rgba(0, 0, 0, 0.6);
+
+  --scrollbar-thumb: #2a3142;
+  --scrollbar-thumb-hover: #3a4358;
 
   color-scheme: dark;
 }
+
+:root[data-theme="light"] {
+  --bg: #f7f8fb;
+  --surface: #ffffff;
+  --surface-2: #f1f3f7;
+  --surface-3: #e6e9f0;
+  --surface-overlay: rgba(15, 23, 42, 0.03);
+
+  --border: #e0e4ec;
+  --border-strong: #c8cfdb;
+  --border-focus: #6d5fff;
+
+  --text: #0f172a;
+  --text-muted: #475569;
+  --text-faint: #8b93a3;
+
+  --accent: #6d5fd6;
+  --accent-strong: #5b4dc5;
+  --accent-text: #4a3eb0;
+  --accent-bg: rgba(109, 95, 214, 0.10);
+  --accent-bg-strong: rgba(109, 95, 214, 0.18);
+
+  --success: #16a34a;
+  --success-bg: rgba(22, 163, 74, 0.10);
+  --success-border: rgba(22, 163, 74, 0.30);
+
+  --info: #2563eb;
+  --info-bg: rgba(37, 99, 235, 0.10);
+  --info-border: rgba(37, 99, 235, 0.28);
+
+  --warn: #b45309;
+  --warn-bg: rgba(180, 83, 9, 0.10);
+  --warn-border: rgba(180, 83, 9, 0.28);
+
+  --error: #dc2626;
+  --error-bg: rgba(220, 38, 38, 0.10);
+  --error-border: rgba(220, 38, 38, 0.30);
+
+  --shadow-sm: 0 1px 2px rgba(15, 23, 42, 0.06);
+  --shadow: 0 4px 14px rgba(15, 23, 42, 0.08);
+  --shadow-strong: 0 12px 28px rgba(15, 23, 42, 0.10);
+
+  --scrollbar-thumb: #d2d8e2;
+  --scrollbar-thumb-hover: #b8c0cd;
+
+  color-scheme: light;
+}
+
+:root {
+  /* Theme-independent tokens */
+  --radius-xs: 4px;
+  --radius-sm: 6px;
+  --radius: 8px;
+  --radius-lg: 12px;
+  --radius-pill: 999px;
+
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 20px;
+  --space-6: 24px;
+  --space-8: 32px;
+
+  --page-pad-x: 28px;
+  --page-pad-y: 20px;
+  --sidebar-w: 288px;
+
+  --duration-fast: 120ms;
+  --duration: 180ms;
+  --ease: cubic-bezier(0.2, 0.6, 0.2, 1);
+
+  --font-sans:
+    "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI",
+    "Noto Sans CJK TC", "PingFang TC", "Microsoft JhengHei", sans-serif;
+  --font-mono:
+    "JetBrains Mono", "Fira Code", ui-monospace, SFMono-Regular, Menlo,
+    Consolas, monospace;
+}
+
+/* =============================================================================
+   Reset & base
+   ========================================================================== */
 
 *,
 *::before,
@@ -41,13 +153,15 @@ body,
 body {
   background: var(--bg);
   color: var(--text);
-  font-family:
-    "Inter", -apple-system, BlinkMacSystemFont, "Segoe UI", "Noto Sans CJK TC",
-    "PingFang TC", "Microsoft JhengHei", sans-serif;
+  font-family: var(--font-sans);
   font-size: 13.5px;
-  line-height: 1.45;
+  line-height: 1.5;
   -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
   user-select: none;
+  transition:
+    background-color var(--duration) var(--ease),
+    color var(--duration) var(--ease);
 }
 
 button,
@@ -64,6 +178,34 @@ select {
   user-select: text;
 }
 
+a {
+  color: var(--accent-text);
+  text-decoration: none;
+}
+a:hover {
+  text-decoration: underline;
+}
+
+/* Visible focus ring for keyboard users; suppressed for mouse via :focus-visible */
+:focus {
+  outline: none;
+}
+:focus-visible {
+  outline: 2px solid var(--border-focus);
+  outline-offset: 2px;
+  border-radius: var(--radius-xs);
+}
+
+/* Honor reduced-motion */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0.01ms !important;
+    animation-duration: 0.01ms !important;
+  }
+}
+
 ::-webkit-scrollbar {
   width: 10px;
   height: 10px;
@@ -72,21 +214,25 @@ select {
   background: transparent;
 }
 ::-webkit-scrollbar-thumb {
-  background: var(--surface-3);
+  background: var(--scrollbar-thumb);
   border-radius: 5px;
 }
 ::-webkit-scrollbar-thumb:hover {
-  background: var(--border-strong);
+  background: var(--scrollbar-thumb-hover);
 }
 
-/* ---------- layout ---------- */
+/* =============================================================================
+   App shell
+   ========================================================================== */
 
 .app {
   display: grid;
-  grid-template-columns: 280px 1fr;
+  grid-template-columns: var(--sidebar-w) 1fr;
   grid-template-rows: 1fr auto;
   height: 100vh;
 }
+
+/* ---------- sidebar ---------- */
 
 .sidebar {
   grid-row: 1 / -1;
@@ -98,18 +244,18 @@ select {
 }
 
 .sidebar-header {
-  padding: 16px 18px 12px;
+  padding: 18px 18px 14px;
   display: flex;
   align-items: center;
   justify-content: space-between;
-  gap: 8px;
+  gap: var(--space-2);
   border-bottom: 1px solid var(--border);
 }
 
 .sidebar-title {
   font-weight: 600;
-  letter-spacing: 0.02em;
-  font-size: 13px;
+  letter-spacing: 0.04em;
+  font-size: 11.5px;
   text-transform: uppercase;
   color: var(--text-muted);
 }
@@ -117,33 +263,54 @@ select {
 .sidebar-body {
   flex: 1;
   overflow-y: auto;
-  padding: 6px 8px;
+  padding: var(--space-2) var(--space-2) var(--space-3);
 }
 
 .sidebar-footer {
   padding: 10px 12px;
   border-top: 1px solid var(--border);
   display: flex;
-  gap: 8px;
+  gap: var(--space-2);
+  align-items: center;
 }
 
 .task-row {
-  padding: 10px 12px;
-  border-radius: var(--radius);
+  padding: 10px 12px 10px 14px;
+  border-radius: var(--radius-sm);
   cursor: pointer;
   display: flex;
   flex-direction: column;
   gap: 4px;
   margin-bottom: 2px;
+  position: relative;
+  transition: background-color var(--duration-fast) var(--ease);
+}
+.task-row::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 6px;
+  bottom: 6px;
+  width: 2px;
+  border-radius: 2px;
+  background: transparent;
+  transition: background-color var(--duration-fast) var(--ease);
 }
 .task-row:hover {
   background: var(--surface-2);
 }
 .task-row.active {
-  background: var(--accent-soft);
+  background: var(--accent-bg);
+}
+.task-row.active::before {
+  background: var(--accent);
 }
 .task-row .task-name {
   font-weight: 500;
+  color: var(--text);
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 .task-row .task-meta {
   display: flex;
@@ -151,7 +318,10 @@ select {
   align-items: center;
   color: var(--text-faint);
   font-size: 11.5px;
+  flex-wrap: wrap;
 }
+
+/* ---------- content area ---------- */
 
 .content {
   display: flex;
@@ -161,7 +331,7 @@ select {
 }
 
 .content-header {
-  padding: 18px var(--page-pad-x) 0;
+  padding: 22px var(--page-pad-x) 0;
   display: flex;
   align-items: baseline;
   justify-content: space-between;
@@ -169,43 +339,98 @@ select {
 }
 
 .content-title {
-  font-size: 19px;
+  font-size: 20px;
   font-weight: 600;
-  letter-spacing: -0.01em;
+  letter-spacing: -0.012em;
+  color: var(--text);
 }
 
 .tabs {
   display: flex;
-  gap: 4px;
-  margin-top: 12px;
+  gap: 2px;
+  margin-top: 14px;
   border-bottom: 1px solid var(--border);
   padding: 0 var(--page-pad-x);
 }
 
 .tab {
-  padding: 9px 16px;
-  border-radius: var(--radius-sm) var(--radius-sm) 0 0;
+  padding: 10px 14px;
   cursor: pointer;
   color: var(--text-muted);
-  border-bottom: 2px solid transparent;
+  border: none;
   background: none;
-  border-top: none;
-  border-left: none;
-  border-right: none;
+  position: relative;
+  font-weight: 500;
+  transition: color var(--duration-fast) var(--ease);
 }
-.tab:hover {
+.tab:hover:not(:disabled) {
   color: var(--text);
 }
 .tab.active {
   color: var(--accent-text);
-  border-bottom-color: var(--accent);
+}
+.tab.active::after {
+  content: "";
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: -1px;
+  height: 2px;
+  background: var(--accent);
+  border-radius: 2px;
+}
+.tab:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
 }
 
 .panel {
   flex: 1;
   overflow-y: auto;
-  padding: 18px var(--page-pad-x) 24px;
+  /* No padding-top: sticky bars inside (.edit-toolbar etc.) pin at top:0 of
+     the scroll viewport, and sticky positioning doesn't always honor negative
+     margins after the element is "stuck." Letting the sticky bar bleed to the
+     literal top edge keeps it flush with the tabs above and removes the gap
+     content used to scroll through. Non-sticky panels (Settings) opt into the
+     old padding with the .panel-pad-top class. */
+  padding: 0 var(--page-pad-x) 28px;
 }
+
+.panel-pad-top {
+  padding-top: var(--page-pad-y);
+}
+
+/* Sticky action bars. Solid background — translucency caused content beneath
+   to bleed through during scroll. Border-bottom doubles as the visual seam to
+   the tabs row sitting just above the panel. */
+.sticky-bar {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-3);
+  background: var(--bg);
+  border-bottom: 1px solid var(--border);
+}
+
+.edit-toolbar {
+  margin: 0 calc(var(--page-pad-x) * -1) 14px;
+  padding: 14px var(--page-pad-x);
+}
+
+.history-list-header {
+  margin: 0 -4px 8px -4px;
+  padding: 8px 4px;
+}
+
+.run-detail-header {
+  margin: 0 -4px 12px -4px;
+  padding: 8px 4px 10px;
+}
+
+/* ---------- status bar ---------- */
 
 .status-bar {
   border-top: 1px solid var(--border);
@@ -213,38 +438,53 @@ select {
   padding: 8px var(--page-pad-x);
   display: flex;
   justify-content: space-between;
+  align-items: center;
+  gap: var(--space-3);
   font-size: 12px;
   color: var(--text-muted);
 }
 
-/* ---------- forms / inputs ---------- */
+.status-bar-right {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+}
+
+/* =============================================================================
+   Forms & inputs
+   ========================================================================== */
 
 .section {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 16px;
+  padding: 18px;
   margin-bottom: 14px;
+  box-shadow: var(--shadow-sm);
 }
 
 .section-title {
-  font-size: 12px;
+  font-size: 11px;
   font-weight: 600;
   text-transform: uppercase;
-  letter-spacing: 0.06em;
+  letter-spacing: 0.07em;
   color: var(--text-muted);
-  margin-bottom: 12px;
+  margin-bottom: 14px;
 }
 
 .field {
-  margin-bottom: 12px;
+  margin-bottom: 14px;
+}
+.field:last-child {
+  margin-bottom: 0;
 }
 
 .field-label {
   display: block;
   font-size: 12.5px;
   color: var(--text-muted);
-  margin-bottom: 4px;
+  margin-bottom: 5px;
+  font-weight: 500;
 }
 
 .input,
@@ -254,22 +494,35 @@ select {
   background: var(--surface-2);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
-  padding: 8px 10px;
+  padding: 8px 11px;
   color: var(--text);
   outline: none;
+  transition:
+    border-color var(--duration-fast) var(--ease),
+    background-color var(--duration-fast) var(--ease);
+}
+.input:hover,
+.textarea:hover,
+.select:hover {
+  border-color: var(--border-strong);
 }
 .input:focus,
 .textarea:focus,
 .select:focus {
   border-color: var(--accent);
+  background: var(--surface);
+}
+.input::placeholder,
+.textarea::placeholder {
+  color: var(--text-faint);
 }
 
 .textarea {
   resize: vertical;
-  min-height: 200px;
-  font-family: "JetBrains Mono", ui-monospace, SFMono-Regular, Menlo, Consolas,
-    monospace;
+  min-height: 220px;
+  font-family: var(--font-mono);
   font-size: 12.5px;
+  line-height: 1.55;
 }
 
 .row {
@@ -285,7 +538,14 @@ select {
 .checkbox {
   display: inline-flex;
   align-items: center;
-  gap: 6px;
+  gap: 8px;
+  cursor: pointer;
+  user-select: none;
+}
+.checkbox input[type="checkbox"] {
+  accent-color: var(--accent);
+  width: 14px;
+  height: 14px;
   cursor: pointer;
 }
 
@@ -304,7 +564,9 @@ select {
   font-size: 12px;
 }
 
-/* ---------- buttons ---------- */
+/* =============================================================================
+   Buttons
+   ========================================================================== */
 
 .btn {
   display: inline-flex;
@@ -318,8 +580,13 @@ select {
   border: 1px solid var(--border);
   cursor: pointer;
   font-weight: 500;
+  font-size: 13px;
+  transition:
+    background-color var(--duration-fast) var(--ease),
+    border-color var(--duration-fast) var(--ease),
+    color var(--duration-fast) var(--ease);
 }
-.btn:hover {
+.btn:hover:not(:disabled) {
   border-color: var(--border-strong);
   background: var(--surface-3);
 }
@@ -331,69 +598,112 @@ select {
 .btn.primary {
   background: var(--accent);
   border-color: var(--accent);
-  color: #0b0d12;
+  color: #fff;
 }
-.btn.primary:hover {
-  background: #9d90ff;
+.btn.primary:hover:not(:disabled) {
+  background: var(--accent-strong);
+  border-color: var(--accent-strong);
+}
+:root[data-theme="dark"] .btn.primary {
+  color: #0a0c11;
 }
 
 .btn.danger {
-  border-color: rgba(236, 113, 109, 0.4);
+  background: transparent;
+  border-color: var(--error-border);
   color: var(--error);
 }
-.btn.danger:hover {
-  background: rgba(236, 113, 109, 0.12);
+.btn.danger:hover:not(:disabled) {
+  background: var(--error-bg);
+  border-color: var(--error);
 }
 
 .btn.ghost {
   background: transparent;
   border-color: transparent;
+  color: var(--text-muted);
 }
-.btn.ghost:hover {
+.btn.ghost:hover:not(:disabled) {
   background: var(--surface-2);
+  color: var(--text);
+  border-color: transparent;
+}
+.btn.ghost.active {
+  background: var(--surface-2);
+  color: var(--text);
 }
 
-/* ---------- chips ---------- */
+.btn.icon {
+  padding: 6px;
+  width: 30px;
+  height: 30px;
+}
+
+/* =============================================================================
+   Chips
+   ========================================================================== */
 
 .chip {
   display: inline-flex;
   align-items: center;
   gap: 4px;
   padding: 2px 8px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   font-size: 11px;
   font-weight: 500;
   background: var(--surface-3);
   color: var(--text-muted);
   border: 1px solid var(--border);
+  line-height: 1.4;
 }
 .chip.success {
-  background: rgba(74, 208, 149, 0.15);
+  background: var(--success-bg);
   color: var(--success);
-  border-color: rgba(74, 208, 149, 0.3);
+  border-color: var(--success-border);
 }
 .chip.info {
-  background: rgba(111, 177, 250, 0.15);
+  background: var(--info-bg);
   color: var(--info);
-  border-color: rgba(111, 177, 250, 0.3);
+  border-color: var(--info-border);
 }
 .chip.warn {
-  background: rgba(229, 177, 79, 0.15);
+  background: var(--warn-bg);
   color: var(--warn);
-  border-color: rgba(229, 177, 79, 0.3);
+  border-color: var(--warn-border);
 }
 .chip.error {
-  background: rgba(236, 113, 109, 0.15);
+  background: var(--error-bg);
   color: var(--error);
-  border-color: rgba(236, 113, 109, 0.3);
+  border-color: var(--error-border);
 }
 .chip.accent {
-  background: var(--accent-soft);
+  background: var(--accent-bg);
   color: var(--accent-text);
-  border-color: rgba(139, 124, 255, 0.4);
+  border-color: var(--accent-bg-strong);
 }
 
-/* ---------- history ---------- */
+/* Pulsing dot for "running" state */
+.chip.info .pulse,
+.chip.accent .pulse {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  animation: pulse 1.6s var(--ease) infinite;
+}
+@keyframes pulse {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 1;
+  }
+}
+
+/* =============================================================================
+   History
+   ========================================================================== */
 
 .run-list {
   display: flex;
@@ -404,15 +714,20 @@ select {
 .run-card {
   background: var(--surface);
   border: 1px solid var(--border);
-  border-radius: var(--radius);
-  padding: 10px 12px;
+  border-radius: var(--radius-sm);
+  padding: 11px 13px;
   cursor: pointer;
+  transition:
+    border-color var(--duration-fast) var(--ease),
+    background-color var(--duration-fast) var(--ease);
 }
 .run-card:hover {
   border-color: var(--border-strong);
+  background: var(--surface-2);
 }
 .run-card.active {
   border-color: var(--accent);
+  background: var(--accent-bg);
 }
 
 .run-card .run-row {
@@ -425,13 +740,13 @@ select {
 .run-card .run-meta {
   color: var(--text-faint);
   font-size: 11.5px;
-  margin-top: 4px;
+  margin-top: 5px;
 }
 
 .history-layout {
   display: grid;
   grid-template-columns: 320px 1fr;
-  gap: 16px;
+  gap: 18px;
   height: 100%;
   min-height: 0;
 }
@@ -446,18 +761,14 @@ select {
   padding-right: 4px;
 }
 
-.run-detail-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 12px;
-}
+/* Layout pieces for run details — base styles only; positioning lives in the
+   sticky-bar override above so the bar shares behavior with .edit-toolbar. */
 
 .event-row {
   display: flex;
   align-items: center;
   gap: 8px;
-  padding: 6px 10px;
+  padding: 7px 11px;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius-sm);
@@ -471,13 +782,14 @@ select {
 
 .event-message {
   margin: 4px 0 8px 12px;
-  padding: 6px 10px;
+  padding: 8px 12px;
   background: var(--surface-2);
   border-radius: var(--radius-sm);
-  font-family: ui-monospace, monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
   white-space: pre-wrap;
   color: var(--text-muted);
+  border: 1px solid var(--border);
 }
 
 .empty-state {
@@ -488,30 +800,40 @@ select {
   height: 100%;
   color: var(--text-faint);
   text-align: center;
-  gap: 8px;
+  gap: 10px;
   padding: 48px 24px;
 }
+.empty-state h2 {
+  color: var(--text-muted);
+  font-weight: 600;
+  font-size: 16px;
+  margin: 0;
+}
 
-/* ---------- conversation ---------- */
+/* =============================================================================
+   Conversation viewer
+   ========================================================================== */
 
 .conv-msg {
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: var(--radius);
-  padding: 12px;
+  padding: 13px 14px;
   margin-bottom: 8px;
+  box-shadow: var(--shadow-sm);
 }
 
 .conv-msg.assistant {
-  border-color: rgba(139, 124, 255, 0.25);
+  border-color: var(--accent-bg-strong);
 }
 
 .conv-role {
-  font-size: 11px;
+  font-size: 10.5px;
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--text-muted);
   margin-bottom: 8px;
+  font-weight: 600;
 }
 
 .conv-part {
@@ -519,21 +841,42 @@ select {
 }
 
 .conv-part .conv-kind {
-  font-size: 11px;
+  font-size: 10.5px;
   color: var(--text-faint);
-  margin-bottom: 2px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  margin-bottom: 3px;
 }
 
 .conv-text {
   white-space: pre-wrap;
   font-size: 13px;
+  line-height: 1.55;
+  color: var(--text);
 }
 
 .conv-text.mono {
-  font-family: ui-monospace, monospace;
+  font-family: var(--font-mono);
   font-size: 12px;
   background: var(--surface-2);
-  padding: 8px 10px;
+  padding: 9px 12px;
   border-radius: var(--radius-sm);
+  border: 1px solid var(--border);
   overflow-x: auto;
+}
+
+/* =============================================================================
+   Utility
+   ========================================================================== */
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
 }

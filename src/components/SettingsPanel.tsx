@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, pickFile } from "../api";
 import type { BinaryStatus, Settings } from "../types";
+import { FolderIcon } from "./Icon";
 
 interface Props {
   settings: Settings;
@@ -42,7 +43,7 @@ export function SettingsPanel({ settings, onSave }: Props) {
   }
 
   return (
-    <div className="panel">
+    <div className="panel panel-pad-top">
       <h2 className="content-title" style={{ marginBottom: 12 }}>
         Settings
       </h2>
@@ -66,6 +67,7 @@ export function SettingsPanel({ settings, onSave }: Props) {
               }
             />
             <button className="btn" onClick={browse}>
+              <FolderIcon size={13} />
               Browse…
             </button>
           </div>

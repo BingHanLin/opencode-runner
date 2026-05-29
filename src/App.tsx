@@ -4,6 +4,8 @@ import { EditTab } from "./components/EditTab";
 import { HistoryTab } from "./components/HistoryTab";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { Sidebar } from "./components/Sidebar";
+import { ThemeToggle } from "./components/ThemeToggle";
+import { applyTheme, getInitialTheme, saveTheme, type Theme } from "./theme";
 import type {
   RunUpdate,
   Settings,
@@ -23,6 +25,12 @@ export default function App() {
   const [newDraft, setNewDraft] = useState<Task | null>(null);
   const [events, setEvents] = useState<RunUpdate[]>([]);
   const [status, setStatus] = useState<string | null>(null);
+  const [theme, setTheme] = useState<Theme>(() => getInitialTheme());
+
+  useEffect(() => {
+    applyTheme(theme);
+    saveTheme(theme);
+  }, [theme]);
 
   // Track which task ids currently have a running run, for the sidebar pill.
   // We derive from RunUpdate events to avoid an extra DB poll on every render.
@@ -66,12 +74,7 @@ export default function App() {
           runningRef.current = stillRunning;
           setRunningTick((t) => t + 1);
         });
-        flash(
-          setStatus,
-          u.status === "ok"
-            ? `Run #${u.run_id} ✓`
-            : `Run #${u.run_id} ${u.status}`,
-        );
+        flash(setStatus, `Run #${u.run_id} ${u.status}`);
       }
     }).then((un) => (unlisten = un));
     return () => {
@@ -239,7 +242,13 @@ export default function App() {
           {file.tasks.length} task{file.tasks.length === 1 ? "" : "s"} ·{" "}
           {file.tasks.filter((t) => t.enabled).length} enabled
         </span>
-        <span>{status ?? "ready"}</span>
+        <div className="status-bar-right">
+          <span>{status ?? "ready"}</span>
+          <ThemeToggle
+            theme={theme}
+            onToggle={() => setTheme(theme === "dark" ? "light" : "dark")}
+          />
+        </div>
       </div>
     </div>
   );

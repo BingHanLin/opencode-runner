@@ -7,6 +7,7 @@ import type {
   RunUpdate,
   Task,
 } from "../types";
+import { RefreshIcon, SquareIcon } from "./Icon";
 import { StatusChip } from "./StatusChip";
 
 interface Props {
@@ -94,15 +95,17 @@ export function HistoryTab({ task, events }: Props) {
     <div className="panel" style={{ display: "flex", padding: 0 }}>
       <div className="history-layout" style={{ padding: "18px 24px 24px" }}>
         <div className="history-left">
-          <div
-            className="row"
-            style={{ justifyContent: "space-between", marginBottom: 10 }}
-          >
+          <div className="sticky-bar history-list-header">
             <span className="section-title" style={{ margin: 0 }}>
               Runs · {runs.length}
             </span>
-            <button className="btn ghost" onClick={reload}>
-              ⟳
+            <button
+              className="btn ghost icon"
+              onClick={reload}
+              aria-label="Refresh runs"
+              title="Refresh"
+            >
+              <RefreshIcon size={15} />
             </button>
           </div>
           {runs.length === 0 ? (
@@ -161,7 +164,7 @@ function RunDetails({
 }) {
   return (
     <>
-      <div className="run-detail-header">
+      <div className="sticky-bar run-detail-header">
         <div className="row" style={{ gap: 8 }}>
           <span className="content-title" style={{ fontSize: 16 }}>
             Run #{run.id}
@@ -170,7 +173,7 @@ function RunDetails({
         </div>
         {run.status === "running" && (
           <button className="btn danger" onClick={onAbort}>
-            Stop
+            <SquareIcon size={13} /> Stop
           </button>
         )}
       </div>
