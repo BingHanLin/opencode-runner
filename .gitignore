@@ -1,8 +1,27 @@
+# Rust
 /target
-/data
-tasks.toml
+/src-tauri/target
 Cargo.lock
+
+# Tauri-generated
+/src-tauri/gen
+
+# Frontend
+/node_modules
+/dist
+/.vite
+
+# Local data
+/data
+/src-tauri/data
+tasks.toml
 
 # Python bytecode (from .claude/skills/* scripts)
 __pycache__/
 *.pyc
+
+# Editor / OS
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/

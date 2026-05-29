@@ -1,39 +1,16 @@
-[package]
-name = "opencode_orchestrator"
-version = "0.1.0"
-edition = "2021"
-description = "Schedule and run opencode tasks, browse their conversation history."
-
-[dependencies]
-# GUI — Iced 0.13 (wgpu + cosmic-text + svg). Single binary, single frontend.
-iced = { version = "0.13", features = ["advanced", "svg", "tokio"] }
-
-# Async + HTTP
-tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "time", "sync", "io-util", "fs"] }
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls"] }
-
-# Data
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-toml = "0.8"
-rusqlite = { version = "0.32", features = ["bundled"] }
-
-# Scheduling
-tokio-cron-scheduler = "0.13"
-cron = "0.13"
-chrono = { version = "0.4", features = ["serde"] }
-
-# Util
-anyhow = "1"
-thiserror = "2"
-dirs = "5"
-uuid = { version = "1", features = ["v4"] }
-rfd = "0.15"
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+[workspace]
+resolver = "2"
+members = ["src-tauri"]
 
 [profile.dev]
 opt-level = 1
 
 [profile.dev.package."*"]
 opt-level = 3
+
+[profile.release]
+codegen-units = 1
+lto = true
+opt-level = "s"
+panic = "abort"
+strip = true

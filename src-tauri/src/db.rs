@@ -1,10 +1,11 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use rusqlite::{params, Connection, OptionalExtension};
+use serde::Serialize;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Run {
     pub id: i64,
     pub task_id: String,
@@ -18,7 +19,7 @@ pub struct Run {
 
 /// One phase of a run — e.g. "Worktree: git fetch --all" or "Run opencode".
 /// Persisted so the UI can render a timeline that survives restarts.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct RunEvent {
     pub id: i64,
     pub run_id: i64,

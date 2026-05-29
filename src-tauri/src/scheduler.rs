@@ -1,29 +1,28 @@
 use crate::config::{Schedule, Task};
 use crate::db::Db;
 use crate::opencode::Cli;
-use crate::runner::{self, CancelRegistry};
+use crate::runner::{self, CancelRegistry, RunNotifier};
 use anyhow::{Context, Result};
-use std::sync::Arc;
-use tokio::sync::Notify;
 use tokio_cron_scheduler::{Job, JobScheduler};
 
 /// Wraps a tokio-cron-scheduler with the orchestrator's task list.
-/// `repaint` is used to wake the GUI thread when a run completes.
+/// `notifier`, if set, is forwarded to each `runner::execute` invocation so
+/// scheduled runs surface step events to the Tauri webview the same way
+/// "Run now" invocations do.
 pub struct Scheduler {
     sched: JobScheduler,
     cli: Cli,
     db: Db,
-    repaint: Arc<Notify>,
-    /// Shared with the GUI so scheduled runs are also Stop-able from the UI.
     registry: CancelRegistry,
+    notifier: Option<RunNotifier>,
 }
 
 impl Scheduler {
     pub async fn new(
         cli: Cli,
         db: Db,
-        repaint: Arc<Notify>,
         registry: CancelRegistry,
+        notifier: Option<RunNotifier>,
     ) -> Result<Self> {
         let sched = JobScheduler::new().await.context("JobScheduler::new")?;
         sched.start().await.context("JobScheduler::start")?;
@@ -31,8 +30,8 @@ impl Scheduler {
             sched,
             cli,
             db,
-            repaint,
             registry,
+            notifier,
         })
     }
 
@@ -50,8 +49,8 @@ impl Scheduler {
 
         let cli = self.cli.clone();
         let db = self.db.clone();
-        let repaint = self.repaint.clone();
         let registry = self.registry.clone();
+        let notifier = self.notifier.clone();
 
         match schedule {
             Schedule::Cron(expr) => {
@@ -61,11 +60,10 @@ impl Scheduler {
                     let task = task_for_closure.clone();
                     let cli = cli.clone();
                     let db = db.clone();
-                    let repaint = repaint.clone();
                     let registry = registry.clone();
+                    let notifier = notifier.clone();
                     Box::pin(async move {
-                        let _ = runner::execute(&task, &cli, &db, &registry).await;
-                        repaint.notify_waiters();
+                        let _ = runner::execute(&task, &cli, &db, &registry, notifier).await;
                     })
                 })
                 .with_context(|| format!("creating cron job for {task_id}"))?;
@@ -81,12 +79,11 @@ impl Scheduler {
                 let task = task.clone();
                 let cli = cli.clone();
                 let db = db.clone();
-                let repaint = repaint.clone();
                 let registry = registry.clone();
+                let notifier = notifier.clone();
                 tokio::spawn(async move {
                     tokio::time::sleep(delay).await;
-                    let _ = runner::execute(&task, &cli, &db, &registry).await;
-                    repaint.notify_waiters();
+                    let _ = runner::execute(&task, &cli, &db, &registry, notifier).await;
                 });
             }
             Schedule::Manual => {
@@ -94,5 +91,11 @@ impl Scheduler {
             }
         }
         Ok(())
+    }
+
+    pub async fn shutdown(mut self) {
+        if let Err(e) = self.sched.shutdown().await {
+            tracing::warn!("scheduler shutdown failed: {e}");
+        }
     }
 }

@@ -12,7 +12,7 @@
 
 use anyhow::{Context, Result};
 use rusqlite::{Connection, OpenFlags};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
 pub fn data_dir() -> PathBuf {
@@ -34,24 +34,18 @@ pub fn db_path() -> PathBuf {
 
 /// A message row as the UI consumes it. `role` and everything else lives in
 /// the row's JSON `data` blob; `id` and `session_id` come from real columns.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Message {
-    #[allow(dead_code)]
     pub id: String,
     pub role: Option<String>,
-    #[allow(dead_code)]
     pub session_id: Option<String>,
-    #[allow(dead_code)]
     pub created_at: Option<i64>,
-    #[allow(dead_code)]
     pub extra: serde_json::Map<String, serde_json::Value>,
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Part {
-    #[allow(dead_code)]
     pub id: String,
-    #[allow(dead_code)]
     pub message_id: Option<String>,
     pub kind: Option<String>,
     pub text: Option<String>,

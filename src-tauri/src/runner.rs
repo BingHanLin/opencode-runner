@@ -2,6 +2,7 @@ use crate::config::Task;
 use crate::db::Db;
 use crate::opencode::Cli;
 use anyhow::{anyhow, Result};
+use serde::Serialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
@@ -46,6 +47,56 @@ pub fn new_cancel_registry() -> CancelRegistry {
     Arc::new(Mutex::new(HashMap::new()))
 }
 
+/// Lifecycle event emitted by the runner — consumed by the Tauri layer to
+/// push real-time updates into the React frontend. Stays GUI-agnostic so the
+/// runner can be tested standalone.
+#[derive(Debug, Clone, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum RunUpdate {
+    Started { run_id: i64, task_id: String },
+    EventStarted { run_id: i64, event_id: i64, name: String },
+    EventFinished { run_id: i64, event_id: i64, status: String, message: Option<String> },
+    SessionAssigned { run_id: i64, session_id: String },
+    Finished { run_id: i64, status: String, error: Option<String> },
+}
+
+pub type RunNotifier = Arc<dyn Fn(RunUpdate) + Send + Sync>;
+
+/// Bundles `db` + optional event notifier so step-event writes and frontend
+/// emits stay in lockstep. Cheap to clone-by-reference.
+struct RunCtx<'a> {
+    db: &'a Db,
+    notifier: Option<&'a RunNotifier>,
+}
+
+impl<'a> RunCtx<'a> {
+    fn emit(&self, u: RunUpdate) {
+        if let Some(n) = self.notifier {
+            n(u);
+        }
+    }
+    fn start_event(&self, run_id: i64, name: &str) -> Option<i64> {
+        let id = self.db.start_event(run_id, name).ok();
+        if let Some(id) = id {
+            self.emit(RunUpdate::EventStarted {
+                run_id,
+                event_id: id,
+                name: name.to_string(),
+            });
+        }
+        id
+    }
+    fn finish_event(&self, run_id: i64, event_id: i64, status: &str, message: Option<&str>) {
+        let _ = self.db.finish_event(event_id, status, message);
+        self.emit(RunUpdate::EventFinished {
+            run_id,
+            event_id,
+            status: status.to_string(),
+            message: message.map(str::to_string),
+        });
+    }
+}
+
 /// Cheap heuristic so both the UI and the runner agree on what counts as a
 /// git repo. `.git` is either a directory (normal checkout) or a file
 /// (linked worktree); both qualify.
@@ -58,24 +109,41 @@ pub fn is_git_repo(path: &Path) -> bool {
 /// `registry` lets the UI cancel an in-flight run by `run_id`. The token is
 /// inserted on start, passed into `cli.run_task`, and removed once the run
 /// has fully wound down (including worktree cleanup).
-pub async fn execute(task: &Task, cli: &Cli, db: &Db, registry: &CancelRegistry) -> Result<i64> {
+/// `notifier`, if set, gets lifecycle and step events for the Tauri layer to
+/// fan out to the webview.
+pub async fn execute(
+    task: &Task,
+    cli: &Cli,
+    db: &Db,
+    registry: &CancelRegistry,
+    notifier: Option<RunNotifier>,
+) -> Result<i64> {
     let run_id = db.insert_run_start(&task.id)?;
     tracing::info!(task = %task.id, run_id, "starting task");
 
-    let cancel = CancelToken::new();
-    registry
-        .lock()
-        .unwrap()
-        .insert(run_id, cancel.clone());
+    let ctx = RunCtx {
+        db,
+        notifier: notifier.as_ref(),
+    };
+    ctx.emit(RunUpdate::Started {
+        run_id,
+        task_id: task.id.clone(),
+    });
 
-    // Optionally swap working_dir for a throwaway git worktree. prepare_worktree
-    // owns its own per-step event emissions so the timeline shows fetch /
-    // verify / add / .worktreeinclude individually.
-    let worktree = match prepare_worktree(task, db, run_id).await {
+    let cancel = CancelToken::new();
+    registry.lock().unwrap().insert(run_id, cancel.clone());
+
+    // Optionally swap working_dir for a throwaway git worktree.
+    let worktree = match prepare_worktree(task, &ctx, run_id).await {
         Ok(w) => w,
         Err(e) => {
             let msg = format!("worktree setup failed: {e:#}");
             db.finish_run(run_id, "error", Some(&msg))?;
+            ctx.emit(RunUpdate::Finished {
+                run_id,
+                status: "error".into(),
+                error: Some(msg.clone()),
+            });
             tracing::error!(task = %task.id, run_id, "{msg}");
             registry.lock().unwrap().remove(&run_id);
             return Err(e);
@@ -86,7 +154,7 @@ pub async fn execute(task: &Task, cli: &Cli, db: &Db, registry: &CancelRegistry)
         .map(|w| w.path.as_path())
         .unwrap_or(task.working_dir.as_path());
 
-    let opencode_evt = db.start_event(run_id, "Run opencode").ok();
+    let opencode_evt = ctx.start_event(run_id, "Run opencode");
     let outcome = cli
         .run_task(
             effective_dir,
@@ -97,29 +165,36 @@ pub async fn execute(task: &Task, cli: &Cli, db: &Db, registry: &CancelRegistry)
         )
         .await;
 
-    let result = match outcome {
+    let (final_status, final_error): (&str, Option<String>) = match &outcome {
         Ok(o) if o.cancelled => {
             if let Some(sid) = &o.session_id {
                 let _ = db.set_run_session(run_id, sid, None);
+                ctx.emit(RunUpdate::SessionAssigned {
+                    run_id,
+                    session_id: sid.clone(),
+                });
             }
             let msg = "aborted by user";
             if let Some(id) = opencode_evt {
-                let _ = db.finish_event(id, "aborted", Some(msg));
+                ctx.finish_event(run_id, id, "aborted", Some(msg));
             }
-            db.finish_run(run_id, "aborted", Some(msg))?;
             tracing::info!(task = %task.id, run_id, session = ?o.session_id, "task aborted by user");
-            Ok(run_id)
+            ("aborted", Some(msg.to_string()))
         }
         Ok(o) => {
             if let Some(sid) = &o.session_id {
                 let _ = db.set_run_session(run_id, sid, None);
+                ctx.emit(RunUpdate::SessionAssigned {
+                    run_id,
+                    session_id: sid.clone(),
+                });
             }
             if o.exit_status.success() {
                 if let Some(id) = opencode_evt {
-                    let _ = db.finish_event(id, "ok", o.session_id.as_deref());
+                    ctx.finish_event(run_id, id, "ok", o.session_id.as_deref());
                 }
-                db.finish_run(run_id, "ok", None)?;
                 tracing::info!(task = %task.id, run_id, session = ?o.session_id, "task ok");
+                ("ok", None)
             } else {
                 let msg = format!(
                     "opencode run exited {:?}\n{}",
@@ -127,47 +202,57 @@ pub async fn execute(task: &Task, cli: &Cli, db: &Db, registry: &CancelRegistry)
                     o.stderr_tail.trim()
                 );
                 if let Some(id) = opencode_evt {
-                    let _ = db.finish_event(id, "error", Some(&msg));
+                    ctx.finish_event(run_id, id, "error", Some(&msg));
                 }
-                db.finish_run(run_id, "error", Some(&msg))?;
                 tracing::warn!(task = %task.id, run_id, "task failed: {msg}");
+                ("error", Some(msg))
             }
-            Ok(run_id)
         }
         Err(e) => {
             let msg = format!("{e:#}");
             if let Some(id) = opencode_evt {
-                let _ = db.finish_event(id, "error", Some(&msg));
+                ctx.finish_event(run_id, id, "error", Some(&msg));
             }
-            db.finish_run(run_id, "error", Some(&msg))?;
             tracing::error!(task = %task.id, run_id, "task failed to launch: {msg}");
-            Err(e)
+            ("error", Some(msg))
         }
     };
+
+    db.finish_run(run_id, final_status, final_error.as_deref())?;
 
     // Tear the worktree down regardless of success/failure. Cleanup errors
     // are logged but don't override the run's outcome — a dangling worktree
     // is best-effort cleaned up by `git worktree prune` later.
     if let Some(w) = worktree {
-        let evt = db.start_event(run_id, "Worktree: cleanup").ok();
+        let evt = ctx.start_event(run_id, "Worktree: cleanup");
         match w.cleanup().await {
             Ok(()) => {
                 if let Some(id) = evt {
-                    let _ = db.finish_event(id, "ok", None);
+                    ctx.finish_event(run_id, id, "ok", None);
                 }
             }
             Err(e) => {
                 let msg = format!("{e:#}");
                 if let Some(id) = evt {
-                    let _ = db.finish_event(id, "error", Some(&msg));
+                    ctx.finish_event(run_id, id, "error", Some(&msg));
                 }
                 tracing::warn!(task = %task.id, "worktree cleanup failed: {msg}");
             }
         }
     }
 
+    ctx.emit(RunUpdate::Finished {
+        run_id,
+        status: final_status.to_string(),
+        error: final_error,
+    });
     registry.lock().unwrap().remove(&run_id);
-    result
+
+    // Map Err outcome from cli back to a top-level error so callers see it.
+    match outcome {
+        Ok(_) => Ok(run_id),
+        Err(e) => Err(e),
+    }
 }
 
 struct WorktreeHandle {
@@ -177,7 +262,6 @@ struct WorktreeHandle {
 
 impl WorktreeHandle {
     async fn cleanup(self) -> Result<()> {
-        // `git worktree remove --force` un-registers and deletes the dir.
         let out = Command::new("git")
             .arg("-C")
             .arg(&self.repo)
@@ -197,8 +281,6 @@ impl WorktreeHandle {
                 String::from_utf8_lossy(&out.stderr).trim()
             );
         }
-        // Belt-and-suspenders: if the dir still exists (remove failed, or
-        // opencode left a stray process holding a file), nuke it directly.
         if self.path.exists() {
             tokio::fs::remove_dir_all(&self.path).await.ok();
         }
@@ -206,14 +288,15 @@ impl WorktreeHandle {
     }
 }
 
-async fn prepare_worktree(task: &Task, db: &Db, run_id: i64) -> Result<Option<WorktreeHandle>> {
+async fn prepare_worktree(
+    task: &Task,
+    ctx: &RunCtx<'_>,
+    run_id: i64,
+) -> Result<Option<WorktreeHandle>> {
     if !task.run_in_worktree {
         return Ok(None);
     }
     if !is_git_repo(&task.working_dir) {
-        // Configured but not a git repo — fall back to running in-place so a
-        // stale checkbox doesn't break the task entirely. The UI hides the
-        // checkbox for non-git dirs, so this is a "tasks.toml drift" path.
         tracing::warn!(
             task = %task.id,
             "run_in_worktree set but {:?} is not a git repo; running in original directory",
@@ -222,12 +305,14 @@ async fn prepare_worktree(task: &Task, db: &Db, run_id: i64) -> Result<Option<Wo
         return Ok(None);
     }
 
-    // When the user pinned a base (e.g. "origin/main"), refresh remote refs
-    // first and verify the base resolves; both steps abort the run on failure
-    // rather than silently falling back to HEAD.
-    let base = task.worktree_base.as_deref().map(str::trim).filter(|s| !s.is_empty());
+    let base = task
+        .worktree_base
+        .as_deref()
+        .map(str::trim)
+        .filter(|s| !s.is_empty());
+
     if let Some(b) = base {
-        let evt = db.start_event(run_id, "Worktree: git fetch --all").ok();
+        let evt = ctx.start_event(run_id, "Worktree: git fetch --all");
         let fetch = Command::new("git")
             .arg("-C")
             .arg(&task.working_dir)
@@ -245,15 +330,15 @@ async fn prepare_worktree(task: &Task, db: &Db, run_id: i64) -> Result<Option<Wo
                 String::from_utf8_lossy(&fetch.stderr).trim()
             );
             if let Some(id) = evt {
-                let _ = db.finish_event(id, "error", Some(&msg));
+                ctx.finish_event(run_id, id, "error", Some(&msg));
             }
             return Err(anyhow!("git fetch --all failed ({msg})"));
         }
         if let Some(id) = evt {
-            let _ = db.finish_event(id, "ok", None);
+            ctx.finish_event(run_id, id, "ok", None);
         }
 
-        let evt = db.start_event(run_id, &format!("Worktree: verify base `{b}`")).ok();
+        let evt = ctx.start_event(run_id, &format!("Worktree: verify base `{b}`"));
         let verify = Command::new("git")
             .arg("-C")
             .arg(&task.working_dir)
@@ -271,7 +356,7 @@ async fn prepare_worktree(task: &Task, db: &Db, run_id: i64) -> Result<Option<Wo
                 "ref {b:?} not found after fetch — check the ref name (remote refs use `<remote>/<branch>` form)"
             );
             if let Some(id) = evt {
-                let _ = db.finish_event(id, "error", Some(&msg));
+                ctx.finish_event(run_id, id, "error", Some(&msg));
             }
             return Err(anyhow!(
                 "worktree base {b:?} not found in {:?} after fetch — aborting",
@@ -279,7 +364,7 @@ async fn prepare_worktree(task: &Task, db: &Db, run_id: i64) -> Result<Option<Wo
             ));
         }
         if let Some(id) = evt {
-            let _ = db.finish_event(id, "ok", None);
+            ctx.finish_event(run_id, id, "ok", None);
         }
     }
 
@@ -291,7 +376,7 @@ async fn prepare_worktree(task: &Task, db: &Db, run_id: i64) -> Result<Option<Wo
         Some(b) => format!("Worktree: git worktree add (from `{b}`)"),
         None => "Worktree: git worktree add (from HEAD)".to_string(),
     };
-    let evt = db.start_event(run_id, &add_label).ok();
+    let evt = ctx.start_event(run_id, &add_label);
     let mut add = Command::new("git");
     add.arg("-C")
         .arg(&task.working_dir)
@@ -315,30 +400,27 @@ async fn prepare_worktree(task: &Task, db: &Db, run_id: i64) -> Result<Option<Wo
             String::from_utf8_lossy(&out.stderr).trim()
         );
         if let Some(id) = evt {
-            let _ = db.finish_event(id, "error", Some(&msg));
+            ctx.finish_event(run_id, id, "error", Some(&msg));
         }
         return Err(anyhow!("git worktree add failed ({msg})"));
     }
     if let Some(id) = evt {
-        let _ = db.finish_event(id, "ok", Some(&tmp.display().to_string()));
+        ctx.finish_event(run_id, id, "ok", Some(&tmp.display().to_string()));
     }
     tracing::info!(task = %task.id, worktree = ?tmp, base = ?base, "created worktree");
 
-    // Best-effort: copy entries listed in `.worktreeinclude`. Failures here
-    // don't fail the run — the worktree itself is usable, the included files
-    // are a convenience. We log every skip/copy decision.
     if task.working_dir.join(".worktreeinclude").exists() {
-        let evt = db.start_event(run_id, "Worktree: apply .worktreeinclude").ok();
+        let evt = ctx.start_event(run_id, "Worktree: apply .worktreeinclude");
         match apply_worktree_include(&task.working_dir, &tmp).await {
             Ok(()) => {
                 if let Some(id) = evt {
-                    let _ = db.finish_event(id, "ok", None);
+                    ctx.finish_event(run_id, id, "ok", None);
                 }
             }
             Err(e) => {
                 let msg = format!("{e:#}");
                 if let Some(id) = evt {
-                    let _ = db.finish_event(id, "error", Some(&msg));
+                    ctx.finish_event(run_id, id, "error", Some(&msg));
                 }
                 tracing::warn!(task = %task.id, "applying .worktreeinclude failed: {msg}");
             }
@@ -351,15 +433,6 @@ async fn prepare_worktree(task: &Task, db: &Db, run_id: i64) -> Result<Option<Wo
     }))
 }
 
-/// Replicate the `.worktreeinclude` convention: copy git-ignored files (and
-/// directories) listed in `<repo>/.worktreeinclude` into the new worktree, so
-/// untracked but locally-essential files (`.env`, `.env.local`, …) are
-/// available without the user having to seed each worktree manually.
-///
-/// Safety rules:
-///   * Only ignored entries are copied. Tracked code is never overwritten.
-///   * Absolute paths and `..` traversal are rejected.
-///   * Missing source entries are skipped silently.
 async fn apply_worktree_include(repo: &Path, worktree: &Path) -> Result<()> {
     let include_path = repo.join(".worktreeinclude");
     if !include_path.exists() {
@@ -371,9 +444,7 @@ async fn apply_worktree_include(repo: &Path, worktree: &Path) -> Result<()> {
         if entry.is_empty() || entry.starts_with('#') {
             continue;
         }
-        if Path::new(entry).is_absolute()
-            || entry.split(['/', '\\']).any(|c| c == "..")
-        {
+        if Path::new(entry).is_absolute() || entry.split(['/', '\\']).any(|c| c == "..") {
             tracing::warn!(".worktreeinclude: refusing suspicious path {entry:?}");
             continue;
         }
@@ -403,7 +474,6 @@ async fn apply_worktree_include(repo: &Path, worktree: &Path) -> Result<()> {
 }
 
 async fn is_git_ignored(repo: &Path, rel: &str) -> bool {
-    // `git check-ignore -q <path>`: exit 0 = ignored, 1 = not ignored, 128 = error.
     matches!(
         Command::new("git")
             .arg("-C").arg(repo)

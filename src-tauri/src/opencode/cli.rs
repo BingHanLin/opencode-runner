@@ -7,12 +7,13 @@
 
 use crate::runner::CancelToken;
 use anyhow::{Context, Result};
+use serde::Serialize;
 use std::path::Path;
 use std::process::Stdio;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Serialize)]
 pub struct Model {
     pub provider_id: String,
     pub model_id: String,
