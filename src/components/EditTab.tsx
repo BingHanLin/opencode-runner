@@ -9,6 +9,7 @@ import {
   SaveIcon,
   TrashIcon,
 } from "./Icon";
+import { ScheduleEditor } from "./ScheduleEditor";
 
 interface Props {
   task: Task;
@@ -131,59 +132,12 @@ export function EditTab({ task, isNew, onSave, onDelete, onRunNow }: Props) {
 
       <section className="section">
         <div className="section-title">Schedule</div>
-        <div className="row" style={{ gap: 6, marginBottom: 12 }}>
-          {(["manual", "cron", "once"] as const).map((k) => (
-            <button
-              key={k}
-              className={`btn ${kind === k ? "primary" : ""}`}
-              onClick={() => set("schedule", switchScheduleKind(draft.schedule, k))}
-            >
-              {k}
-            </button>
-          ))}
-        </div>
-
-        {kind === "manual" && (
-          <div className="help">
-            Manual tasks only run when you click <strong>Run now</strong>.
-          </div>
-        )}
-
-        {kind === "cron" && (
-          <>
-            <div className="field">
-              <label className="field-label">
-                Quartz cron expression (6 or 7 fields: sec min hour day month
-                dow [year])
-              </label>
-              <input
-                className="input"
-                value={draft.schedule.slice(5)}
-                placeholder="0 0 9 ? * MON-FRI"
-                onChange={(e) => set("schedule", `cron:${e.target.value}`)}
-              />
-            </div>
-            <div className="help">
-              `day-of-month` and `day-of-week` can't both be specific values —
-              put `?` in the one you don't want to constrain.
-            </div>
-          </>
-        )}
-
-        {kind === "once" && (
-          <div className="field">
-            <label className="field-label">RFC3339 timestamp</label>
-            <input
-              className="input"
-              value={draft.schedule.slice(5)}
-              placeholder="2026-06-01T09:00:00Z"
-              onChange={(e) => set("schedule", `once:${e.target.value}`)}
-            />
-          </div>
-        )}
-
+        <ScheduleEditor
+          schedule={draft.schedule}
+          onChange={(v) => set("schedule", v)}
+        />
         {kind !== "manual" && (
-          <label className="checkbox" style={{ marginTop: 12 }}>
+          <label className="checkbox" style={{ marginTop: 14 }}>
             <input
               type="checkbox"
               checked={draft.enabled}
@@ -231,30 +185,63 @@ export function EditTab({ task, isNew, onSave, onDelete, onRunNow }: Props) {
           </select>
         </div>
 
-        <label className="checkbox">
-          <input
-            type="checkbox"
-            checked={draft.dangerously_skip_permissions}
-            onChange={(e) =>
-              set("dangerously_skip_permissions", e.target.checked)
-            }
-          />
-          --dangerously-skip-permissions
-        </label>
-        {draft.dangerously_skip_permissions && (
-          <div
-            className="warn-text"
-            style={{
-              marginTop: 6,
-              display: "inline-flex",
-              alignItems: "center",
-              gap: 6,
-            }}
-          >
-            <AlertIcon size={13} />
-            opencode will run without prompting you to allow tool calls.
+        <div className="field">
+          <label className="field-label">Timeout (minutes)</label>
+          <div className="row">
+            <input
+              type="number"
+              min={0}
+              max={1440}
+              step={5}
+              className="input"
+              style={{ maxWidth: 140 }}
+              value={
+                draft.timeout_secs == null
+                  ? ""
+                  : Math.round(draft.timeout_secs / 60)
+              }
+              onChange={(e) => {
+                const v = e.target.value;
+                if (v === "") return set("timeout_secs", null);
+                const n = Math.max(0, Math.min(1440, parseInt(v, 10) || 0));
+                set("timeout_secs", n === 0 ? null : n * 60);
+              }}
+            />
+            <span className="help">
+              {draft.timeout_secs && draft.timeout_secs > 0
+                ? `gracefully cancel runs that exceed ${draft.timeout_secs}s`
+                : "no timeout — run can take as long as opencode needs"}
+            </span>
           </div>
-        )}
+        </div>
+
+        <div>
+          <label className="checkbox">
+            <input
+              type="checkbox"
+              checked={draft.dangerously_skip_permissions}
+              onChange={(e) =>
+                set("dangerously_skip_permissions", e.target.checked)
+              }
+            />
+            --dangerously-skip-permissions
+          </label>
+          {draft.dangerously_skip_permissions && (
+            <div
+              className="warn-text"
+              style={{
+                marginTop: 6,
+                marginLeft: 22,
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+              }}
+            >
+              <AlertIcon size={13} />
+              opencode will run without prompting you to allow tool calls.
+            </div>
+          )}
+        </div>
 
         <div style={{ marginTop: 10 }}>
           <label className="checkbox">
@@ -272,15 +259,16 @@ export function EditTab({ task, isNew, onSave, onDelete, onRunNow }: Props) {
             <input
               className="input"
               value={draft.worktree_base ?? ""}
-              placeholder="origin/main"
+              placeholder="leave empty to fork from current HEAD"
               onChange={(e) =>
                 set("worktree_base", e.target.value || null)
               }
             />
             <div className="help" style={{ marginTop: 4 }}>
-              When set, the runner does `git fetch --all` first, verifies the
-              base, then creates the worktree from it. Leave blank to fork
-              from HEAD.
+              When set (e.g. <code>origin/main</code>), the runner does{" "}
+              <code>git fetch --all</code> first, verifies the ref, then
+              creates the worktree from it; any failure aborts the run with
+              no HEAD fallback.
             </div>
           </div>
         )}
@@ -300,18 +288,6 @@ export function EditTab({ task, isNew, onSave, onDelete, onRunNow }: Props) {
       </section>
     </div>
   );
-}
-
-function switchScheduleKind(
-  current: string,
-  next: "manual" | "cron" | "once",
-): string {
-  if (next === "manual") return "manual";
-  const body =
-    current.startsWith("cron:") || current.startsWith("once:")
-      ? current.slice(5)
-      : "";
-  return `${next}:${body}`;
 }
 
 function validate(t: Task): string | null {

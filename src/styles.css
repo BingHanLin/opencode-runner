@@ -430,6 +430,27 @@ a:hover {
   padding: 8px 4px 10px;
 }
 
+/* RunDetails fills its scroll container vertically even with sparse content,
+   so an in-flight run doesn't render as a short card hovering at the top
+   that grows downward as events stream in. The conversation section soaks
+   up the remaining height; once content overflows, .history-right scrolls. */
+.run-details {
+  display: flex;
+  flex-direction: column;
+  /* `min-height: 100%` of .history-right (which now has a real 100% height
+     thanks to the grid-template-rows + min-height:0 above). */
+  min-height: 100%;
+}
+
+.section-conversation {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+}
+.section-conversation > .section-title {
+  flex: 0 0 auto;
+}
+
 /* ---------- status bar ---------- */
 
 .status-bar {
@@ -745,20 +766,30 @@ a:hover {
 
 .history-layout {
   display: grid;
-  grid-template-columns: 320px 1fr;
+  /* `1fr` alone resolves to `minmax(auto, 1fr)`, so the right column can be
+     forced wider by long unbroken tokens (tool output, long URLs) — the cell
+     "grows" as the conversation streams in. `minmax(0, 1fr)` hard-pins it. */
+  grid-template-columns: 320px minmax(0, 1fr);
+  /* Same trick on the row axis: without an explicit track the row is auto-
+     sized and .history-right collapses to its content's height, which breaks
+     `min-height: 100%` on .run-details. */
+  grid-template-rows: 1fr;
   gap: 18px;
   height: 100%;
   min-height: 0;
 }
 
-.history-left {
-  overflow-y: auto;
-  padding-right: 4px;
-}
-
+.history-left,
 .history-right {
   overflow-y: auto;
   padding-right: 4px;
+  /* Grid items default to `min-height/width: auto`, which lets content
+     overflow and push the cell larger; explicit 0 lets the cell stay at 1fr
+     and the overflow scroll behave normally. */
+  min-height: 0;
+  min-width: 0;
+  height: 100%;
+  width: 100%;
 }
 
 /* Layout pieces for run details — base styles only; positioning lives in the
@@ -774,10 +805,41 @@ a:hover {
   border-radius: var(--radius-sm);
   margin-bottom: 4px;
   font-size: 12.5px;
+  width: 100%;
+  text-align: left;
+  color: var(--text);
+  cursor: pointer;
+  transition: background-color var(--duration-fast) var(--ease);
 }
-
+.event-row:hover:not(:disabled) {
+  background: var(--surface-2);
+}
+.event-row:disabled {
+  cursor: default;
+}
 .event-row .event-name {
   flex: 1;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.event-arrow {
+  color: var(--text-faint);
+  width: 10px;
+  font-size: 10px;
+  display: inline-flex;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.event-time,
+.event-dur {
+  font-family: var(--font-mono);
+  font-size: 11.5px;
+  white-space: nowrap;
+  flex-shrink: 0;
+}
+.event-time {
+  color: var(--text-muted);
 }
 
 .event-message {
@@ -788,6 +850,7 @@ a:hover {
   font-family: var(--font-mono);
   font-size: 12px;
   white-space: pre-wrap;
+  overflow-wrap: anywhere;
   color: var(--text-muted);
   border: 1px solid var(--border);
 }
@@ -850,6 +913,11 @@ a:hover {
 
 .conv-text {
   white-space: pre-wrap;
+  /* Long URLs / tokens shouldn't push the column wider — they wrap mid-word
+     instead. `anywhere` is the most aggressive (and what fixes our case);
+     `break-word` would still keep words on their own line if possible. */
+  overflow-wrap: anywhere;
+  word-break: break-word;
   font-size: 13px;
   line-height: 1.55;
   color: var(--text);
@@ -862,7 +930,91 @@ a:hover {
   padding: 9px 12px;
   border-radius: var(--radius-sm);
   border: 1px solid var(--border);
+  /* Keep raw code blocks horizontally scrollable rather than wrapping — for
+     stack traces / structured output, breaking lines mid-token hurts more
+     than it helps. The grid column is hard-pinned by minmax(0,1fr) so this
+     scroll is contained within the section, not the page. */
   overflow-x: auto;
+  margin: 0;
+}
+
+/* ---------- conversation part variants ---------- */
+
+.conv-reasoning .conv-text {
+  color: var(--text-muted);
+  font-size: 12.5px;
+  font-style: italic;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.tool-call {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  background: var(--surface-2);
+  margin: 6px 0;
+  overflow: hidden;
+}
+.tool-head {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  text-align: left;
+  color: var(--text);
+  font-size: 12.5px;
+  transition: background-color var(--duration-fast) var(--ease);
+}
+.tool-head:hover {
+  background: var(--surface-3);
+}
+.tool-arrow {
+  color: var(--text-faint);
+  font-size: 10px;
+  width: 10px;
+  display: inline-flex;
+  justify-content: center;
+}
+.tool-name {
+  font-family: var(--font-mono);
+  color: var(--accent-text);
+  font-weight: 500;
+}
+.tool-title {
+  color: var(--text-muted);
+  font-size: 12px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
+}
+.tool-body {
+  border-top: 1px solid var(--border);
+  padding: 8px 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  background: var(--surface);
+}
+.tool-section .conv-kind {
+  margin-bottom: 3px;
+}
+.tool-section .conv-text.mono {
+  max-height: 360px;
+  overflow: auto;
+}
+
+.conv-step-finish {
+  color: var(--text-faint);
+  font-size: 11px;
+  font-family: var(--font-mono);
+  padding: 4px 0 2px;
+  border-top: 1px dashed var(--border);
+  margin-top: 6px;
 }
 
 /* =============================================================================

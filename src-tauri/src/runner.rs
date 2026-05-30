@@ -14,19 +14,41 @@ use tokio::sync::Notify;
 /// One-shot cancellation primitive shared with `cli.run_task` so the runner
 /// can cut a long-running opencode child short on user request. Once cancelled
 /// it stays cancelled — checks made after the fact still observe the signal.
+/// Carries an optional `reason` so the cause (timeout / user / shutdown) can
+/// be surfaced in the run record without inventing a separate channel.
 #[derive(Clone, Default)]
-pub struct CancelToken(Arc<(AtomicBool, Notify)>);
+pub struct CancelToken(Arc<CancelInner>);
+
+#[derive(Default)]
+struct CancelInner {
+    cancelled: AtomicBool,
+    notify: Notify,
+    reason: Mutex<Option<String>>,
+}
 
 impl CancelToken {
     pub fn new() -> Self {
         Self::default()
     }
     pub fn cancel(&self) {
-        self.0 .0.store(true, Ordering::SeqCst);
-        self.0 .1.notify_waiters();
+        self.0.cancelled.store(true, Ordering::SeqCst);
+        self.0.notify.notify_waiters();
+    }
+    pub fn cancel_with_reason(&self, reason: impl Into<String>) {
+        // First reason wins — avoids a later cancel (e.g. user clicking Stop
+        // on an already-timed-out run) overwriting the more specific cause.
+        let mut guard = self.0.reason.lock().unwrap();
+        if guard.is_none() {
+            *guard = Some(reason.into());
+        }
+        drop(guard);
+        self.cancel();
+    }
+    pub fn reason(&self) -> Option<String> {
+        self.0.reason.lock().unwrap().clone()
     }
     pub fn is_cancelled(&self) -> bool {
-        self.0 .0.load(Ordering::SeqCst)
+        self.0.cancelled.load(Ordering::SeqCst)
     }
     /// Resolves immediately if already cancelled; otherwise resolves on the
     /// next `cancel()` call. Safe to `tokio::select!` against — woken by
@@ -35,7 +57,7 @@ impl CancelToken {
         if self.is_cancelled() {
             return;
         }
-        self.0 .1.notified().await;
+        self.0.notify.notified().await;
     }
 }
 
@@ -133,6 +155,21 @@ pub async fn execute(
     let cancel = CancelToken::new();
     registry.lock().unwrap().insert(run_id, cancel.clone());
 
+    // Per-task timeout: spawn a sleep that flips the cancel token with a
+    // distinct reason. Aborted via `JoinHandle::abort` once execute() falls
+    // off so a successfully-finished run doesn't leave an orphan timer.
+    let timeout_handle = task.timeout_secs.filter(|s| *s > 0).map(|secs| {
+        let cancel_for_timeout = cancel.clone();
+        let task_id = task.id.clone();
+        tokio::spawn(async move {
+            tokio::time::sleep(std::time::Duration::from_secs(secs)).await;
+            if !cancel_for_timeout.is_cancelled() {
+                tracing::warn!(task = %task_id, "run timed out after {secs}s; cancelling");
+                cancel_for_timeout.cancel_with_reason(format!("timed out after {secs}s"));
+            }
+        })
+    });
+
     // Optionally swap working_dir for a throwaway git worktree.
     let worktree = match prepare_worktree(task, &ctx, run_id).await {
         Ok(w) => w,
@@ -155,6 +192,23 @@ pub async fn execute(
         .unwrap_or(task.working_dir.as_path());
 
     let opencode_evt = ctx.start_event(run_id, "Run opencode");
+
+    // Callback: as soon as opencode emits its `ses_…` token, surface it to
+    // the UI (and stash in db) so the conversation viewer can attach mid-run
+    // instead of waiting for the process to exit.
+    let on_session_db = db.clone();
+    let on_session_notifier = notifier.clone();
+    let on_session: Option<Box<dyn FnOnce(String) + Send + 'static>> =
+        Some(Box::new(move |sid: String| {
+            let _ = on_session_db.set_run_session(run_id, &sid, None);
+            if let Some(n) = on_session_notifier.as_ref() {
+                n(RunUpdate::SessionAssigned {
+                    run_id,
+                    session_id: sid,
+                });
+            }
+        }));
+
     let outcome = cli
         .run_task(
             effective_dir,
@@ -162,33 +216,30 @@ pub async fn execute(
             task.model.as_deref(),
             task.dangerously_skip_permissions,
             cancel.clone(),
+            on_session,
         )
         .await;
 
+    // Stop the timeout timer — if the run already finished we don't want it
+    // to fire later and try to cancel a fresh re-run by accident.
+    if let Some(h) = timeout_handle {
+        h.abort();
+    }
+
     let (final_status, final_error): (&str, Option<String>) = match &outcome {
         Ok(o) if o.cancelled => {
-            if let Some(sid) = &o.session_id {
-                let _ = db.set_run_session(run_id, sid, None);
-                ctx.emit(RunUpdate::SessionAssigned {
-                    run_id,
-                    session_id: sid.clone(),
-                });
-            }
-            let msg = "aborted by user";
+            // Session id (if any) was already emitted mid-stream by the
+            // `on_session` callback above — no duplicate emission here.
+            let msg = cancel
+                .reason()
+                .unwrap_or_else(|| "aborted by user".to_string());
             if let Some(id) = opencode_evt {
-                ctx.finish_event(run_id, id, "aborted", Some(msg));
+                ctx.finish_event(run_id, id, "aborted", Some(&msg));
             }
-            tracing::info!(task = %task.id, run_id, session = ?o.session_id, "task aborted by user");
-            ("aborted", Some(msg.to_string()))
+            tracing::info!(task = %task.id, run_id, session = ?o.session_id, "task aborted: {msg}");
+            ("aborted", Some(msg))
         }
         Ok(o) => {
-            if let Some(sid) = &o.session_id {
-                let _ = db.set_run_session(run_id, sid, None);
-                ctx.emit(RunUpdate::SessionAssigned {
-                    run_id,
-                    session_id: sid.clone(),
-                });
-            }
             if o.exit_status.success() {
                 if let Some(id) = opencode_evt {
                     ctx.finish_event(run_id, id, "ok", o.session_id.as_deref());
@@ -442,6 +493,14 @@ async fn apply_worktree_include(repo: &Path, worktree: &Path) -> Result<()> {
     for line in raw.lines() {
         let entry = line.trim();
         if entry.is_empty() || entry.starts_with('#') {
+            continue;
+        }
+        // Trim leading `/` and `\` so users can write `/foo` for "from repo
+        // root" (gitignore convention). Without this, on Windows `repo.join`
+        // would interpret `/foo` as "keep drive prefix, replace the rest" and
+        // look outside the repo entirely.
+        let entry = entry.trim_start_matches(['/', '\\']);
+        if entry.is_empty() {
             continue;
         }
         if Path::new(entry).is_absolute() || entry.split(['/', '\\']).any(|c| c == "..") {

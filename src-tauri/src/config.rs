@@ -36,8 +36,20 @@ pub struct Task {
     /// the repo's current HEAD.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub worktree_base: Option<String>,
+    /// Hard time budget for a single run, in seconds. When set and exceeded,
+    /// the runner gracefully cancels the run (same path as user-initiated
+    /// Stop) and the record is marked `aborted` with reason "timed out".
+    /// `None` or 0 means no timeout. Defaults to 1 hour for new tasks via
+    /// `default_timeout_secs` so old tasks without the field still inherit
+    /// the safety net rather than being unbounded.
+    #[serde(default = "default_timeout_secs")]
+    pub timeout_secs: Option<u64>,
     #[serde(default)]
     pub enabled: bool,
+}
+
+fn default_timeout_secs() -> Option<u64> {
+    Some(3600)
 }
 
 #[derive(Debug, Clone)]

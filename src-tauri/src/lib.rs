@@ -129,7 +129,13 @@ pub fn run() {
                         }
                     }
                     TRAY_QUIT_ID => {
-                        app.exit(0);
+                        // Don't call `app.exit(0)` directly — fire off the
+                        // graceful path so in-flight runs get a chance to
+                        // cancel and clean up their worktrees before we go.
+                        let app = app.clone();
+                        tauri::async_runtime::spawn(async move {
+                            graceful_shutdown(app).await;
+                        });
                     }
                     _ => {}
                 })
@@ -165,6 +171,59 @@ pub fn run() {
     builder
         .run(tauri::generate_context!())
         .expect("error running tauri application");
+}
+
+/// Tear down in-flight work cleanly before exiting. Triggered from the tray
+/// Quit menu — for force-kills (Task Manager, OS signal we can't trap) the
+/// process dies immediately and runs end up stuck in "running" in db.
+///
+/// 1. Cancel every token in the registry with a distinct reason.
+/// 2. Poll the registry until it drains, capped so a hung opencode child
+///    can't block the app from ever quitting.
+/// 3. Shut the scheduler down so it stops accepting new cron firings.
+/// 4. `app.exit(0)`.
+async fn graceful_shutdown(app: tauri::AppHandle) {
+    use crate::runner::CancelToken;
+    let state: tauri::State<AppState> = app.state();
+
+    let tokens: Vec<CancelToken> = {
+        let reg = state.registry.lock().unwrap();
+        reg.values().cloned().collect()
+    };
+    if !tokens.is_empty() {
+        tracing::info!("graceful shutdown: cancelling {} in-flight run(s)", tokens.len());
+        for t in &tokens {
+            t.cancel_with_reason("app shutting down");
+        }
+    }
+
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    loop {
+        let empty = state.registry.lock().unwrap().is_empty();
+        if empty {
+            if !tokens.is_empty() {
+                tracing::info!("graceful shutdown: all runs cleaned up");
+            }
+            break;
+        }
+        if std::time::Instant::now() > deadline {
+            tracing::warn!(
+                "graceful shutdown: 30s deadline exceeded, exiting with {} run(s) still active",
+                state.registry.lock().unwrap().len()
+            );
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+
+    // Stop the scheduler so any pending cron firings don't kick off a new
+    // run while we're closing down.
+    let scheduler = state.scheduler.lock().await.take();
+    if let Some(s) = scheduler {
+        s.shutdown().await;
+    }
+
+    app.exit(0);
 }
 
 /// Walk up from the current working directory looking for an existing

@@ -56,16 +56,25 @@ impl Scheduler {
             Schedule::Cron(expr) => {
                 let task_id = task.id.clone();
                 let task_for_closure = task.clone();
-                let job = Job::new_async(expr.as_str(), move |_uuid, _l| {
-                    let task = task_for_closure.clone();
-                    let cli = cli.clone();
-                    let db = db.clone();
-                    let registry = registry.clone();
-                    let notifier = notifier.clone();
-                    Box::pin(async move {
-                        let _ = runner::execute(&task, &cli, &db, &registry, notifier).await;
-                    })
-                })
+                // Quartz fields (sec / min / hour / dom / dow) are evaluated
+                // against the host's local timezone — so "Daily 09:00" in the
+                // UI fires at 09:00 local, matching what the user typed in
+                // their date/time picker. `chrono::Local` carries its own
+                // FixedOffset which Send+Sync, so the closure stays movable.
+                let job = Job::new_async_tz(
+                    expr.as_str(),
+                    chrono::Local,
+                    move |_uuid, _l| {
+                        let task = task_for_closure.clone();
+                        let cli = cli.clone();
+                        let db = db.clone();
+                        let registry = registry.clone();
+                        let notifier = notifier.clone();
+                        Box::pin(async move {
+                            let _ = runner::execute(&task, &cli, &db, &registry, notifier).await;
+                        })
+                    },
+                )
                 .with_context(|| format!("creating cron job for {task_id}"))?;
                 self.sched.add(job).await?;
             }

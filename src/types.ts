@@ -12,6 +12,8 @@ export interface Task {
   dangerously_skip_permissions: boolean;
   run_in_worktree: boolean;
   worktree_base: string | null;
+  /** Hard time budget per run, in seconds. 0/null = unbounded. Default 3600. */
+  timeout_secs: number | null;
   enabled: boolean;
 }
 
@@ -120,6 +122,7 @@ export function newBlankTask(): Task {
     dangerously_skip_permissions: false,
     run_in_worktree: false,
     worktree_base: null,
+    timeout_secs: 3600,
     enabled: false,
   };
 }

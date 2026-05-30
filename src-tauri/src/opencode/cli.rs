@@ -117,6 +117,10 @@ impl Cli {
         model: Option<&str>,
         dangerously_skip_permissions: bool,
         cancel: CancelToken,
+        // Fires the first time we spot a `ses_...` token in opencode's stdout,
+        // mid-stream, so callers can advertise the session id to the UI long
+        // before the child process exits. Fires at most once.
+        on_session: Option<Box<dyn FnOnce(String) + Send + 'static>>,
     ) -> Result<RunOutcome> {
         let trimmed = prompt.trim();
         if trimmed.is_empty() {
@@ -153,14 +157,20 @@ impl Cli {
 
         // Watch stdout for the first `ses_...` token. opencode --format json
         // emits one JSON object per line; rather than parse every event we just
-        // grab the first session id we see.
+        // grab the first session id we see and fire `on_session` immediately so
+        // the UI can subscribe to the live conversation while the run is still
+        // going. The same id is also stashed in RunOutcome at the end.
         let session_id_handle = tokio::spawn(async move {
             let mut reader = BufReader::new(stdout).lines();
             let mut found: Option<String> = None;
+            let mut on_session = on_session;
             while let Ok(Some(line)) = reader.next_line().await {
                 tracing::debug!(target: "opencode.run.stdout", "{line}");
                 if found.is_none() {
                     if let Some(sid) = extract_session_id(&line) {
+                        if let Some(cb) = on_session.take() {
+                            cb(sid.clone());
+                        }
                         found = Some(sid);
                     }
                 }
