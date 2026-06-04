@@ -44,6 +44,12 @@ pub struct Task {
     /// the safety net rather than being unbounded.
     #[serde(default = "default_timeout_secs")]
     pub timeout_secs: Option<u64>,
+    /// Free-form labels for grouping/filtering in the sidebar. Always
+    /// serialized so the frontend can rely on `task.tags` existing — TOML
+    /// will gain a `tags = []` line for tasks without labels, which is a
+    /// fair trade for a stable wire shape.
+    #[serde(default)]
+    pub tags: Vec<String>,
     #[serde(default)]
     pub enabled: bool,
 }

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { api, onRunUpdate } from "./api";
 import { EditTab } from "./components/EditTab";
 import { HistoryTab } from "./components/HistoryTab";
@@ -33,9 +33,11 @@ export default function App() {
   }, [theme]);
 
   // Track which task ids currently have a running run, for the sidebar pill.
-  // We derive from RunUpdate events to avoid an extra DB poll on every render.
-  const runningRef = useRef<Set<string>>(new Set());
-  const [runningTick, setRunningTick] = useState(0);
+  // Stored as state (not a ref) so the Set's identity changes on each update
+  // — React's prop equality check would skip the Sidebar re-render otherwise.
+  const [runningTaskIds, setRunningTaskIds] = useState<Set<string>>(
+    () => new Set(),
+  );
 
   const tasks: Task[] = useMemo(() => {
     if (!file) return [];
@@ -61,18 +63,21 @@ export default function App() {
     onRunUpdate((u) => {
       setEvents((prev) => [...prev.slice(-200), u]);
       if (u.kind === "started") {
-        runningRef.current.add(u.task_id);
-        setRunningTick((t) => t + 1);
+        setRunningTaskIds((prev) => {
+          const next = new Set(prev);
+          next.add(u.task_id);
+          return next;
+        });
         flash(setStatus, `Run #${u.run_id} started`);
       } else if (u.kind === "finished") {
         // We don't have task_id on finish; refresh the run list to update
         // the pill state lazily. For accuracy we re-derive by listing runs.
         api.listRuns(50).then((runs) => {
-          const stillRunning = new Set(
-            runs.filter((r) => r.status === "running").map((r) => r.task_id),
+          setRunningTaskIds(
+            new Set(
+              runs.filter((r) => r.status === "running").map((r) => r.task_id),
+            ),
           );
-          runningRef.current = stillRunning;
-          setRunningTick((t) => t + 1);
         });
         flash(setStatus, `Run #${u.run_id} ${u.status}`);
       }
@@ -85,10 +90,9 @@ export default function App() {
   // Prime the running-pill state on boot so existing in-flight runs appear.
   useEffect(() => {
     api.listRuns(50).then((runs) => {
-      runningRef.current = new Set(
-        runs.filter((r) => r.status === "running").map((r) => r.task_id),
+      setRunningTaskIds(
+        new Set(runs.filter((r) => r.status === "running").map((r) => r.task_id)),
       );
-      setRunningTick((t) => t + 1);
     });
   }, []);
 
@@ -163,6 +167,23 @@ export default function App() {
     setTab("history");
   }
 
+  async function reorderTasks(orderedIds: string[]) {
+    if (!file) return;
+    const byId = new Map(file.tasks.map((t) => [t.id, t]));
+    const reordered = orderedIds
+      .map((id) => byId.get(id))
+      .filter((t): t is Task => !!t);
+    // Belt-and-suspenders: if the reorder somehow dropped a task, splice it
+    // back in at the end so we never lose state on a buggy drag interaction.
+    for (const t of file.tasks) {
+      if (!orderedIds.includes(t.id)) reordered.push(t);
+    }
+    const next: TasksFile = { settings: file.settings, tasks: reordered };
+    setFile(next);
+    await api.saveTasksFile(next);
+    flash(setStatus, "Reordered");
+  }
+
   async function saveSettings(settings: Settings) {
     if (!file) return;
     const next: TasksFile = { settings, tasks: file.tasks };
@@ -185,11 +206,11 @@ export default function App() {
         tasks={tasks}
         activeId={activeId}
         view={view === "task" ? "task" : view === "settings" ? "settings" : "empty"}
-        runningTaskIds={runningRef.current}
+        runningTaskIds={runningTaskIds}
         onSelect={selectTask}
         onNew={newTask}
         onSettings={openSettings}
-        key={`sidebar-${runningTick}`}
+        onReorder={reorderTasks}
       />
 
       <main className="content">

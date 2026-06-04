@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import { api, pickDirectory } from "../api";
 import type { Model, Task } from "../types";
 import { parseScheduleKind } from "../types";
@@ -126,6 +126,13 @@ export function EditTab({ task, isNew, onSave, onDelete, onRunNow }: Props) {
             className="input"
             value={draft.name}
             onChange={(e) => set("name", e.target.value)}
+          />
+        </div>
+        <div className="field">
+          <label className="field-label">Tags</label>
+          <TagsField
+            tags={draft.tags ?? []}
+            onChange={(next) => set("tags", next)}
           />
         </div>
       </section>
@@ -286,6 +293,61 @@ export function EditTab({ task, isNew, onSave, onDelete, onRunNow }: Props) {
           {draft.prompt.length} chars · {draft.prompt.split("\n").length} lines
         </div>
       </section>
+    </div>
+  );
+}
+
+function TagsField({
+  tags,
+  onChange,
+}: {
+  tags: string[];
+  onChange: (next: string[]) => void;
+}) {
+  const [draft, setDraft] = useState("");
+  function commit(raw: string) {
+    const next = raw.trim().toLowerCase();
+    if (!next) return;
+    if (tags.includes(next)) return;
+    onChange([...tags, next]);
+  }
+  function onKeyDown(e: KeyboardEvent<HTMLInputElement>) {
+    if (e.key === "Enter" || e.key === ",") {
+      e.preventDefault();
+      commit(draft);
+      setDraft("");
+    } else if (e.key === "Backspace" && !draft && tags.length > 0) {
+      onChange(tags.slice(0, -1));
+    }
+  }
+  return (
+    <div className="tags-input">
+      {tags.map((t) => (
+        <span key={t} className="chip accent tag-chip">
+          {t}
+          <button
+            type="button"
+            className="tag-chip-x"
+            aria-label={`Remove tag ${t}`}
+            onClick={() => onChange(tags.filter((x) => x !== t))}
+          >
+            ×
+          </button>
+        </span>
+      ))}
+      <input
+        className="tag-input"
+        value={draft}
+        placeholder={tags.length ? "" : "review, daily, frontend…"}
+        onChange={(e) => setDraft(e.target.value)}
+        onKeyDown={onKeyDown}
+        onBlur={() => {
+          if (draft) {
+            commit(draft);
+            setDraft("");
+          }
+        }}
+      />
     </div>
   );
 }

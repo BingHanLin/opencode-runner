@@ -14,6 +14,8 @@ export interface Task {
   worktree_base: string | null;
   /** Hard time budget per run, in seconds. 0/null = unbounded. Default 3600. */
   timeout_secs: number | null;
+  /** Free-form labels for sidebar filtering. */
+  tags: string[];
   enabled: boolean;
 }
 
@@ -123,6 +125,7 @@ export function newBlankTask(): Task {
     run_in_worktree: false,
     worktree_base: null,
     timeout_secs: 3600,
+    tags: [],
     enabled: false,
   };
 }
