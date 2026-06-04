@@ -11,6 +11,7 @@ import type {
   Model,
   Run,
   RunEvent,
+  RunLog,
   RunUpdate,
   TasksFile,
 } from "./types";
@@ -22,6 +23,8 @@ export const api = {
   listRunsForTask: (taskId: string, limit?: number) =>
     invoke<Run[]>("list_runs_for_task", { taskId, limit }),
   listEvents: (runId: number) => invoke<RunEvent[]>("list_events", { runId }),
+  listLogs: (runId: number, limit?: number) =>
+    invoke<RunLog[]>("list_logs", { runId, limit }),
   loadConversation: (sessionId: string) =>
     invoke<MessagePair[]>("load_conversation", { sessionId }),
   opencodeBinaryStatus: () =>

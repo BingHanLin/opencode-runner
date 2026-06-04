@@ -1,15 +1,24 @@
-import { useCallback, useEffect, useState } from "react";
+import {
+  useCallback,
+  useEffect,
+  useRef,
+  useState,
+  type UIEvent,
+} from "react";
 import { api } from "../api";
 import type {
   ConversationPart,
   MessagePair,
   Run,
   RunEvent,
+  RunLog,
   RunUpdate,
   Task,
 } from "../types";
 import { RefreshIcon, SquareIcon } from "./Icon";
 import { StatusChip } from "./StatusChip";
+
+const LOG_BUFFER_MAX = 800;
 
 interface Props {
   task: Task;
@@ -23,6 +32,7 @@ export function HistoryTab({ task, events }: Props) {
   const [runEvents, setRunEvents] = useState<RunEvent[]>([]);
   const [convo, setConvo] = useState<MessagePair[] | null>(null);
   const [convoError, setConvoError] = useState<string | null>(null);
+  const [logs, setLogs] = useState<RunLog[]>([]);
 
   const reload = useCallback(async () => {
     const list = await api.listRunsForTask(task.id, 100);
@@ -36,6 +46,7 @@ export function HistoryTab({ task, events }: Props) {
     setActiveRunId(null);
     setRunEvents([]);
     setConvo(null);
+    setLogs([]);
     reload();
   }, [task.id]);
 
@@ -63,17 +74,41 @@ export function HistoryTab({ task, events }: Props) {
       last.run_id === activeRunId
     ) {
       reload();
+    } else if (last.kind === "log_line" && last.run_id === activeRunId) {
+      const incoming = last;
+      setLogs((prev) => {
+        // Dedup against any log already loaded by the initial fetch — the
+        // tail query returns the latest N, so an event arriving moments
+        // before the fetch resolves could otherwise be rendered twice.
+        if (prev.some((l) => l.id === incoming.log_id)) return prev;
+        const next = [
+          ...prev,
+          {
+            id: incoming.log_id,
+            run_id: incoming.run_id,
+            stream: incoming.stream,
+            line_no: incoming.line_no,
+            ts: new Date().toISOString(),
+            text: incoming.text,
+          },
+        ];
+        return next.length > LOG_BUFFER_MAX
+          ? next.slice(next.length - LOG_BUFFER_MAX)
+          : next;
+      });
     }
   }, [events, task.id, activeRunId, reload]);
 
-  // Load events + conversation for whichever run is selected.
+  // Load events + conversation + logs for whichever run is selected.
   useEffect(() => {
     if (activeRunId == null) {
       setRunEvents([]);
       setConvo(null);
+      setLogs([]);
       return;
     }
     api.listEvents(activeRunId).then(setRunEvents);
+    api.listLogs(activeRunId).then(setLogs).catch(() => setLogs([]));
     const run = runs.find((r) => r.id === activeRunId);
     if (run?.session_id) {
       setConvoError(null);
@@ -181,6 +216,7 @@ export function HistoryTab({ task, events }: Props) {
             <RunDetails
               run={activeRun}
               events={runEvents}
+              logs={logs}
               conversation={convo}
               conversationError={convoError}
               now={now}
@@ -200,6 +236,7 @@ export function HistoryTab({ task, events }: Props) {
 function RunDetails({
   run,
   events,
+  logs,
   conversation,
   conversationError,
   now,
@@ -209,6 +246,7 @@ function RunDetails({
 }: {
   run: Run;
   events: RunEvent[];
+  logs: RunLog[];
   conversation: MessagePair[] | null;
   conversationError: string | null;
   now: number;
@@ -289,6 +327,8 @@ function RunDetails({
         )}
       </section>
 
+      <LogsSection logs={logs} live={run.status === "running"} />
+
       <section className="section section-conversation">
         <div className="section-title">Conversation</div>
         {!run.session_id ? (
@@ -323,6 +363,103 @@ function RunDetails({
       </section>
     </div>
   );
+}
+
+// ============================================================================
+//                                Logs (tail)
+// ============================================================================
+
+function LogsSection({ logs, live }: { logs: RunLog[]; live: boolean }) {
+  const [expanded, setExpanded] = useState(false);
+  const [stickToBottom, setStickToBottom] = useState(true);
+  const boxRef = useRef<HTMLPreElement | null>(null);
+
+  // When new lines arrive on a live run, scroll to bottom only if the user is
+  // already pinned there. Detaching from the bottom (by scrolling up) lets
+  // them read older lines without being yanked back on every event.
+  useEffect(() => {
+    if (!expanded) return;
+    const el = boxRef.current;
+    if (!el || !stickToBottom) return;
+    el.scrollTop = el.scrollHeight;
+  }, [logs, expanded, stickToBottom]);
+
+  function onScroll(e: UIEvent<HTMLPreElement>) {
+    const el = e.currentTarget;
+    const atBottom =
+      el.scrollHeight - el.scrollTop - el.clientHeight < 24;
+    if (atBottom !== stickToBottom) setStickToBottom(atBottom);
+  }
+
+  const counts = countByStream(logs);
+  const summary =
+    logs.length === 0
+      ? live
+        ? "waiting…"
+        : "no output captured"
+      : `${logs.length} line${logs.length === 1 ? "" : "s"}` +
+        (counts.stderr > 0 ? ` · ${counts.stderr} stderr` : "");
+
+  return (
+    <section className="section">
+      <button
+        type="button"
+        className="logs-head"
+        onClick={() => setExpanded((e) => !e)}
+        aria-expanded={expanded}
+      >
+        <span className="event-arrow">{expanded ? "▾" : "▸"}</span>
+        <span className="section-title" style={{ margin: 0 }}>
+          Output
+        </span>
+        <span className="help logs-summary">{summary}</span>
+        {live && expanded && !stickToBottom && (
+          <span
+            className="chip"
+            onClick={(e) => {
+              e.stopPropagation();
+              setStickToBottom(true);
+              const el = boxRef.current;
+              if (el) el.scrollTop = el.scrollHeight;
+            }}
+            title="Scroll to bottom"
+          >
+            jump to live
+          </span>
+        )}
+      </button>
+      {expanded && (
+        <pre
+          ref={boxRef}
+          className="logs-box mono"
+          onScroll={onScroll}
+        >
+          {logs.length === 0 ? (
+            <span className="help">No output captured yet.</span>
+          ) : (
+            logs.map((l) => (
+              <span
+                key={l.id}
+                className={l.stream === "stderr" ? "log-line err" : "log-line"}
+              >
+                {l.text + "\n"}
+              </span>
+            ))
+          )}
+        </pre>
+      )}
+    </section>
+  );
+}
+
+function countByStream(logs: RunLog[]): { stdout: number; stderr: number } {
+  let stdout = 0;
+  let stderr = 0;
+  for (const l of logs) {
+    if (l.stream === "stderr") stderr++;
+    else stdout++;
+  }
+  return { stdout, stderr };
 }
 
 // ============================================================================

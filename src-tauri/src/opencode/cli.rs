@@ -10,8 +10,15 @@ use anyhow::{Context, Result};
 use serde::Serialize;
 use std::path::Path;
 use std::process::Stdio;
+use std::sync::Arc;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
+
+/// Sink for raw stdout/stderr lines emitted by the opencode child. The first
+/// argument is `"stdout"` or `"stderr"`; the second is the captured line
+/// (without trailing newline). The sink is held by an `Arc` so both stdout
+/// and stderr reader tasks can share the same target.
+pub type LogSink = Arc<dyn Fn(&'static str, String) + Send + Sync>;
 
 #[derive(Debug, Clone, Serialize)]
 pub struct Model {
@@ -121,6 +128,10 @@ impl Cli {
         // mid-stream, so callers can advertise the session id to the UI long
         // before the child process exits. Fires at most once.
         on_session: Option<Box<dyn FnOnce(String) + Send + 'static>>,
+        // Optional stream sink: every captured line (stdout + stderr) is sent
+        // here in order, tagged with which stream it came from. Used by the
+        // runner to persist and broadcast logs without coupling cli.rs to db.
+        log_sink: Option<LogSink>,
     ) -> Result<RunOutcome> {
         let trimmed = prompt.trim();
         if trimmed.is_empty() {
@@ -159,13 +170,19 @@ impl Cli {
         // emits one JSON object per line; rather than parse every event we just
         // grab the first session id we see and fire `on_session` immediately so
         // the UI can subscribe to the live conversation while the run is still
-        // going. The same id is also stashed in RunOutcome at the end.
+        // going. The same id is also stashed in RunOutcome at the end. Every
+        // line also goes to the optional log sink so the History tab can tail
+        // raw CLI output.
+        let stdout_sink = log_sink.clone();
         let session_id_handle = tokio::spawn(async move {
             let mut reader = BufReader::new(stdout).lines();
             let mut found: Option<String> = None;
             let mut on_session = on_session;
             while let Ok(Some(line)) = reader.next_line().await {
                 tracing::debug!(target: "opencode.run.stdout", "{line}");
+                if let Some(sink) = &stdout_sink {
+                    sink("stdout", line.clone());
+                }
                 if found.is_none() {
                     if let Some(sid) = extract_session_id(&line) {
                         if let Some(cb) = on_session.take() {
@@ -179,11 +196,15 @@ impl Cli {
         });
 
         // Keep stderr drained (and tail the last ~4KB for diagnostics).
+        let stderr_sink = log_sink;
         let stderr_handle = tokio::spawn(async move {
             let mut reader = BufReader::new(stderr).lines();
             let mut tail = String::new();
             while let Ok(Some(line)) = reader.next_line().await {
                 tracing::debug!(target: "opencode.run.stderr", "{line}");
+                if let Some(sink) = &stderr_sink {
+                    sink("stderr", line.clone());
+                }
                 tail.push_str(&line);
                 tail.push('\n');
                 if tail.len() > 4096 {

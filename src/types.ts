@@ -49,6 +49,15 @@ export interface RunEvent {
   message: string | null;
 }
 
+export interface RunLog {
+  id: number;
+  run_id: number;
+  stream: string; // "stdout" | "stderr"
+  line_no: number;
+  ts: string;
+  text: string;
+}
+
 export interface Model {
   provider_id: string;
   model_id: string;
@@ -92,6 +101,14 @@ export type RunUpdate =
       message: string | null;
     }
   | { kind: "session_assigned"; run_id: number; session_id: string }
+  | {
+      kind: "log_line";
+      run_id: number;
+      log_id: number;
+      stream: string;
+      line_no: number;
+      text: string;
+    }
   | {
       kind: "finished";
       run_id: number;

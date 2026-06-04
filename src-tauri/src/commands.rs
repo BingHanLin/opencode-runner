@@ -3,7 +3,7 @@
 //! frontend doesn't need to special-case anyhow's structured chain.
 
 use crate::config::{self, Settings, Task, TasksFile};
-use crate::db::{Run, RunEvent};
+use crate::db::{Run, RunEvent, RunLog};
 use crate::opencode::storage::{self, Message, Part};
 use crate::opencode::{Cli, Model};
 use crate::runner::{self, is_git_repo, RunNotifier};
@@ -69,6 +69,15 @@ pub fn list_runs_for_task(
 #[tauri::command]
 pub fn list_events(state: State<'_, AppState>, run_id: i64) -> Result<Vec<RunEvent>, String> {
     state.db.list_events_for_run(run_id).map_err(s)
+}
+
+#[tauri::command]
+pub fn list_logs(
+    state: State<'_, AppState>,
+    run_id: i64,
+    limit: Option<i64>,
+) -> Result<Vec<RunLog>, String> {
+    state.db.list_logs_for_run(run_id, limit.unwrap_or(500)).map_err(s)
 }
 
 #[derive(Serialize)]

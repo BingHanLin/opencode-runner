@@ -30,6 +30,19 @@ pub struct RunEvent {
     pub message: Option<String>,
 }
 
+/// One line of raw stdout/stderr captured from the opencode child. Persisted
+/// so the History tab can show what the CLI actually printed, including
+/// stderr warnings the JSON event stream doesn't surface.
+#[derive(Debug, Clone, Serialize)]
+pub struct RunLog {
+    pub id: i64,
+    pub run_id: i64,
+    pub stream: String, // "stdout" | "stderr"
+    pub line_no: i64,
+    pub ts: DateTime<Utc>,
+    pub text: String,
+}
+
 #[derive(Clone)]
 pub struct Db {
     inner: Arc<Mutex<Connection>>,
@@ -68,6 +81,17 @@ impl Db {
                 FOREIGN KEY (run_id) REFERENCES runs(id)
             );
             CREATE INDEX IF NOT EXISTS idx_run_events_run_id ON run_events(run_id, id);
+
+            CREATE TABLE IF NOT EXISTS run_logs (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                run_id       INTEGER NOT NULL,
+                stream       TEXT NOT NULL,
+                line_no      INTEGER NOT NULL,
+                ts           TEXT NOT NULL,
+                text         TEXT NOT NULL,
+                FOREIGN KEY (run_id) REFERENCES runs(id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_run_logs_run_id ON run_logs(run_id, id);
             "#,
         )?;
         Ok(Self {
@@ -166,6 +190,42 @@ impl Db {
         Ok(out)
     }
 
+    pub fn append_log(
+        &self,
+        run_id: i64,
+        stream: &str,
+        line_no: i64,
+        text: &str,
+    ) -> Result<i64> {
+        let conn = self.inner.lock().unwrap();
+        let now = Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO run_logs (run_id, stream, line_no, ts, text) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![run_id, stream, line_no, now, text],
+        )?;
+        Ok(conn.last_insert_rowid())
+    }
+
+    /// Latest `limit` log lines for a run, returned in chronological order.
+    /// We page from the tail because runs can produce thousands of lines and
+    /// the UI only ever shows a tail; reading the whole table is wasteful.
+    pub fn list_logs_for_run(&self, run_id: i64, limit: i64) -> Result<Vec<RunLog>> {
+        let conn = self.inner.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT * FROM (
+                 SELECT id, run_id, stream, line_no, ts, text
+                 FROM run_logs WHERE run_id = ?1
+                 ORDER BY id DESC LIMIT ?2
+             ) ORDER BY id ASC",
+        )?;
+        let rows = stmt.query_map(params![run_id, limit], row_to_log)?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
     #[allow(dead_code)]
     pub fn get_run(&self, id: i64) -> Result<Option<Run>> {
         let conn = self.inner.lock().unwrap();
@@ -204,6 +264,18 @@ fn row_to_event(row: &rusqlite::Row<'_>) -> rusqlite::Result<RunEvent> {
         started_at: parse_rfc3339(&started_at_s),
         finished_at: finished_at_s.as_deref().map(parse_rfc3339),
         message: row.get(6)?,
+    })
+}
+
+fn row_to_log(row: &rusqlite::Row<'_>) -> rusqlite::Result<RunLog> {
+    let ts_s: String = row.get(4)?;
+    Ok(RunLog {
+        id: row.get(0)?,
+        run_id: row.get(1)?,
+        stream: row.get(2)?,
+        line_no: row.get(3)?,
+        ts: parse_rfc3339(&ts_s),
+        text: row.get(5)?,
     })
 }
 

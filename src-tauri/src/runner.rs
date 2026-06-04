@@ -1,12 +1,12 @@
 use crate::config::Task;
 use crate::db::Db;
-use crate::opencode::Cli;
+use crate::opencode::{Cli, LogSink};
 use anyhow::{anyhow, Result};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Mutex};
 use tokio::process::Command;
 use tokio::sync::Notify;
@@ -79,6 +79,13 @@ pub enum RunUpdate {
     EventStarted { run_id: i64, event_id: i64, name: String },
     EventFinished { run_id: i64, event_id: i64, status: String, message: Option<String> },
     SessionAssigned { run_id: i64, session_id: String },
+    LogLine {
+        run_id: i64,
+        log_id: i64,
+        stream: String,
+        line_no: i64,
+        text: String,
+    },
     Finished { run_id: i64, status: String, error: Option<String> },
 }
 
@@ -209,6 +216,39 @@ pub async fn execute(
             }
         }));
 
+    // Per-line stdout/stderr sink: persist to db (so the History tab can show
+    // older runs) and emit a `LogLine` for any live listeners. Line numbers
+    // are run-scoped and monotonic across both streams so the UI can render
+    // them in a single chronological tail.
+    let log_sink: LogSink = {
+        let db = db.clone();
+        let notifier_for_sink = notifier.clone();
+        let counter = Arc::new(AtomicI64::new(0));
+        Arc::new(move |stream, mut text| {
+            // Guard against a runaway 10MB-on-one-line scenario blowing up
+            // the sqlite row. 4 KB is plenty for any sensible log line.
+            if text.len() > 4096 {
+                text.truncate(4096);
+                text.push_str("…[truncated]");
+            }
+            let line_no = counter.fetch_add(1, Ordering::SeqCst);
+            match db.append_log(run_id, stream, line_no, &text) {
+                Ok(log_id) => {
+                    if let Some(n) = notifier_for_sink.as_ref() {
+                        n(RunUpdate::LogLine {
+                            run_id,
+                            log_id,
+                            stream: stream.to_string(),
+                            line_no,
+                            text,
+                        });
+                    }
+                }
+                Err(e) => tracing::warn!("append_log failed for run {run_id}: {e}"),
+            }
+        })
+    };
+
     let outcome = cli
         .run_task(
             effective_dir,
@@ -217,6 +257,7 @@ pub async fn execute(
             task.dangerously_skip_permissions,
             cancel.clone(),
             on_session,
+            Some(log_sink),
         )
         .await;
 
