@@ -112,6 +112,10 @@ pub struct StoragePaths {
     /// `opencode.db` — opencode CLI's session storage. We read it for the
     /// History tab's Conversation view; opencode itself owns the writes.
     pub opencode_session_db: String,
+    /// OS temp dir. Worktree-enabled runs create
+    /// `opencode-orchestrator-wt-<uuid>/` directories here and tear them
+    /// down after the run; nothing is persisted across runs.
+    pub worktree_root: String,
 }
 
 #[tauri::command]
@@ -120,6 +124,7 @@ pub fn storage_paths(state: State<'_, AppState>) -> Result<StoragePaths, String>
         config_path: state.config_path.display().to_string(),
         runs_db: state.db_path.display().to_string(),
         opencode_session_db: storage::db_path().display().to_string(),
+        worktree_root: std::env::temp_dir().display().to_string(),
     })
 }
 

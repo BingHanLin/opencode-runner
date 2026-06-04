@@ -136,6 +136,11 @@ export function SettingsPanel({ settings, onSave }: Props) {
               path={paths.opencode_session_db}
               note="opencode.db — owned by the opencode CLI; read-only here, used to render conversations."
             />
+            <StoragePathRow
+              label="Worktree root"
+              path={paths.worktree_root}
+              note="OS temp dir. Worktree-enabled runs create opencode-orchestrator-wt-<uuid>/ folders here and remove them when the run ends."
+            />
           </div>
         ) : (
           <div className="help">Loading paths…</div>

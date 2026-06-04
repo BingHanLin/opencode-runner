@@ -73,6 +73,7 @@ export interface StoragePaths {
   config_path: string;
   runs_db: string;
   opencode_session_db: string;
+  worktree_root: string;
 }
 
 export interface ConversationMessage {
