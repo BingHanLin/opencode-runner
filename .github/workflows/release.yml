@@ -46,9 +46,8 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
 
       - name: Cache Rust target dir
+        # Root Cargo.toml is a workspace; let rust-cache auto-detect it.
         uses: swatinem/rust-cache@v2
-        with:
-          workspaces: ./src-tauri -> target
 
       # WebKitGTK + AppImage tooling. Required only on Linux. Pinned to the
       # 4.1 line because Tauri 2 dropped 4.0; AppImage needs patchelf to
@@ -96,9 +95,11 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: installers-${{ matrix.platform }}
+          # Cargo target/ sits at the workspace root (we have a root
+          # Cargo.toml workspace), so bundles are NOT nested under src-tauri/.
           path: |
-            src-tauri/target/release/bundle/nsis/*.exe
-            src-tauri/target/release/bundle/deb/*.deb
-            src-tauri/target/release/bundle/appimage/*.AppImage
+            target/release/bundle/nsis/*.exe
+            target/release/bundle/deb/*.deb
+            target/release/bundle/appimage/*.AppImage
           if-no-files-found: ignore
           retention-days: 14
