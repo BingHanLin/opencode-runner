@@ -1,0 +1,104 @@
+name: Release
+
+# Build installers for Windows (NSIS .exe) and Linux (.deb, .AppImage).
+#
+# How to trigger:
+#   * Push a tag matching `v*` (e.g. `git tag v0.2.0 && git push --tags`)
+#     → a draft GitHub Release is created and the installers are attached.
+#   * Or run manually from the Actions tab via "Run workflow"
+#     → installers are uploaded as workflow artifacts only (no release).
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+# Needed by tauri-action to create/update GitHub releases.
+permissions:
+  contents: write
+
+jobs:
+  build:
+    strategy:
+      # Don't cancel the Linux build if Windows fails (or vice versa).
+      fail-fast: false
+      matrix:
+        include:
+          - platform: windows-latest
+            args: '--bundles nsis'
+          - platform: ubuntu-22.04
+            args: '--bundles deb,appimage'
+
+    runs-on: ${{ matrix.platform }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust target dir
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: ./src-tauri -> target
+
+      # WebKitGTK + AppImage tooling. Required only on Linux. Pinned to the
+      # 4.1 line because Tauri 2 dropped 4.0; AppImage needs patchelf to
+      # rewrite the ELF interpreter.
+      - name: Install Linux build dependencies
+        if: matrix.platform == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+            libwebkit2gtk-4.1-dev \
+            libayatana-appindicator3-dev \
+            librsvg2-dev \
+            patchelf
+
+      - name: Install npm dependencies
+        run: npm ci
+
+      # tauri-action handles `npm run build` + cargo release build + bundling,
+      # and (when tagName is set) creates/updates the GitHub Release with the
+      # produced installers attached.
+      - name: Build and upload
+        uses: tauri-apps/tauri-action@v0
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        with:
+          # Only create a release on tag pushes. Manual runs just build.
+          tagName: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
+          releaseName: 'opencode orchestrator ${{ github.ref_name }}'
+          releaseBody: |
+            ### Downloads
+
+            * **Windows** — `opencode orchestrator_<version>_x64-setup.exe` (NSIS installer; will fetch WebView2 runtime on first run if missing).
+            * **Linux (Debian / Ubuntu 22.04+)** — `opencode-orchestrator_<version>_amd64.deb` — install via `sudo apt install ./opencode-orchestrator_*.deb`.
+            * **Linux (any distro, portable)** — `opencode_orchestrator_<version>_amd64.AppImage` — `chmod +x` then run.
+
+            Released as a draft — review and publish from the Releases tab.
+          releaseDraft: true
+          prerelease: false
+          args: ${{ matrix.args }}
+
+      # Always upload artifacts so manual runs (no tag) still produce
+      # downloadable installers from the Actions tab.
+      - name: Upload installers as workflow artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: installers-${{ matrix.platform }}
+          path: |
+            src-tauri/target/release/bundle/nsis/*.exe
+            src-tauri/target/release/bundle/deb/*.deb
+            src-tauri/target/release/bundle/appimage/*.AppImage
+          if-no-files-found: ignore
+          retention-days: 14
