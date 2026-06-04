@@ -261,8 +261,17 @@ export function EditTab({ task, isNew, onSave, onDelete, onRunNow }: Props) {
           </label>
         </div>
         {draft.run_in_worktree && (
-          <div className="field" style={{ marginTop: 10 }}>
-            <label className="field-label">Worktree base ref (optional)</label>
+          <>
+            <div className="help" style={{ marginTop: 6 }}>
+              The fresh worktree starts clean — any gitignored files
+              (e.g. <code>.env</code>, <code>node_modules</code>, build output)
+              won't be there. To copy some in, drop a{" "}
+              <code>.worktreeinclude</code> file at the repo root listing one
+              path per line (<code>#</code> for comments). Paths tracked by git
+              are refused.
+            </div>
+            <div className="field" style={{ marginTop: 10 }}>
+              <label className="field-label">Worktree base ref (optional)</label>
             <input
               className="input"
               value={draft.worktree_base ?? ""}
@@ -278,6 +287,7 @@ export function EditTab({ task, isNew, onSave, onDelete, onRunNow }: Props) {
               no HEAD fallback.
             </div>
           </div>
+          </>
         )}
       </section>
 
