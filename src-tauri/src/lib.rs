@@ -15,7 +15,6 @@ use crate::opencode::Cli;
 use crate::runner::new_cancel_registry;
 use crate::scheduler::Scheduler;
 use crate::state::AppState;
-use std::path::PathBuf;
 use tauri::{
     image::Image,
     menu::{Menu, MenuItem},
@@ -67,16 +66,20 @@ pub fn run() {
             commands::storage_paths,
         ])
         .setup(|app| {
-            // Resolve workspace-relative paths. `cargo tauri dev` launches the
-            // binary with CWD=src-tauri/, so we walk up looking for an
-            // existing `tasks.toml` — that anchors the project root for both
-            // dev runs and an installed binary the user double-clicks from
-            // its directory.
-            let workspace = resolve_workspace_root();
-            tracing::info!(workspace = %workspace.display(), "workspace root resolved");
-            let config_path = workspace.join("tasks.toml");
-            let data_dir = workspace.join("data");
-            std::fs::create_dir_all(&data_dir).ok();
+            // Per-user app data dir resolved from the bundle identifier in
+            // tauri.conf.json. Windows: %APPDATA%\dev.opencode.orchestrator\.
+            // macOS:   ~/Library/Application Support/dev.opencode.orchestrator/.
+            // Linux:   ~/.local/share/dev.opencode.orchestrator/.
+            // Same path in dev and packaged runs, so config/history survive
+            // a `cargo clean` and don't depend on where the binary was
+            // launched from.
+            let data_dir = app
+                .path()
+                .app_data_dir()
+                .expect("resolving app data dir");
+            std::fs::create_dir_all(&data_dir).expect("creating app data dir");
+            tracing::info!(data_dir = %data_dir.display(), "app data dir resolved");
+            let config_path = data_dir.join("tasks.toml");
             let db_path = data_dir.join("runs.db");
             let db = Db::open(&db_path).expect("opening run history db");
             let registry = new_cancel_registry();
@@ -228,25 +231,6 @@ async fn graceful_shutdown(app: tauri::AppHandle) {
     }
 
     app.exit(0);
-}
-
-/// Walk up from the current working directory looking for an existing
-/// `tasks.toml`. Tauri dev mode launches the binary with CWD=`src-tauri/`,
-/// which would create a brand-new (and empty) tasks.toml right next to the
-/// crate manifest unless we hop up to the project root first.
-fn resolve_workspace_root() -> PathBuf {
-    let start = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
-    let mut dir = start.clone();
-    for _ in 0..6 {
-        if dir.join("tasks.toml").exists() {
-            return dir;
-        }
-        match dir.parent() {
-            Some(p) => dir = p.to_path_buf(),
-            None => break,
-        }
-    }
-    start
 }
 
 /// Generate a 32x32 solid-accent disc as the tray icon so we don't have to
