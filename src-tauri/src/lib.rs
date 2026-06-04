@@ -64,6 +64,7 @@ pub fn run() {
             commands::restart_scheduler,
             commands::is_git_repo_path,
             commands::show_main_window,
+            commands::storage_paths,
         ])
         .setup(|app| {
             // Resolve workspace-relative paths. `cargo tauri dev` launches the
@@ -106,6 +107,7 @@ pub fn run() {
                 registry,
                 scheduler: Mutex::new(Some(scheduler)),
                 config_path,
+                db_path,
             });
 
             // System tray — minimal Show / Quit menu, left-click also shows.

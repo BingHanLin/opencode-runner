@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { api, pickFile } from "../api";
-import type { BinaryStatus, Settings } from "../types";
+import type { BinaryStatus, Settings, StoragePaths } from "../types";
 import { FolderIcon } from "./Icon";
 
 interface Props {
@@ -11,6 +11,7 @@ interface Props {
 export function SettingsPanel({ settings, onSave }: Props) {
   const [draft, setDraft] = useState<Settings>(settings);
   const [status, setStatus] = useState<BinaryStatus | null>(null);
+  const [paths, setPaths] = useState<StoragePaths | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
@@ -19,6 +20,11 @@ export function SettingsPanel({ settings, onSave }: Props) {
   useEffect(() => {
     api.opencodeBinaryStatus().then(setStatus).catch(() => setStatus(null));
   }, [settings]);
+
+  // Fetch storage paths once on mount — they don't change at runtime.
+  useEffect(() => {
+    api.storagePaths().then(setPaths).catch(() => setPaths(null));
+  }, []);
 
   const dirty = draft.opencode_binary !== settings.opencode_binary;
 
@@ -110,6 +116,51 @@ export function SettingsPanel({ settings, onSave }: Props) {
           </div>
         )}
       </section>
+
+      <section className="section">
+        <div className="section-title">Storage</div>
+        {paths ? (
+          <div className="storage-paths">
+            <StoragePathRow
+              label="Task config"
+              path={paths.config_path}
+              note="tasks.toml — task definitions and settings."
+            />
+            <StoragePathRow
+              label="Run history db"
+              path={paths.runs_db}
+              note="runs.db — this app's SQLite store for runs, events, and logs."
+            />
+            <StoragePathRow
+              label="opencode session db"
+              path={paths.opencode_session_db}
+              note="opencode.db — owned by the opencode CLI; read-only here, used to render conversations."
+            />
+          </div>
+        ) : (
+          <div className="help">Loading paths…</div>
+        )}
+      </section>
+    </div>
+  );
+}
+
+function StoragePathRow({
+  label,
+  path,
+  note,
+}: {
+  label: string;
+  path: string;
+  note: string;
+}) {
+  return (
+    <div className="storage-path-row">
+      <div className="storage-path-label">{label}</div>
+      <div className="storage-path-value mono" title={path}>
+        {path}
+      </div>
+      <div className="help">{note}</div>
     </div>
   );
 }

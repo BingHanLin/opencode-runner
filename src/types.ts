@@ -69,6 +69,12 @@ export interface BinaryStatus {
   honored_configured: boolean;
 }
 
+export interface StoragePaths {
+  config_path: string;
+  runs_db: string;
+  opencode_session_db: string;
+}
+
 export interface ConversationMessage {
   id: string;
   role: string | null;

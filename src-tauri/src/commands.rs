@@ -103,6 +103,26 @@ pub fn load_conversation(session_id: String) -> Result<Vec<MessagePair>, String>
         .collect())
 }
 
+#[derive(Serialize)]
+pub struct StoragePaths {
+    /// `tasks.toml` — task definitions and settings live here.
+    pub config_path: String,
+    /// `runs.db` — this app's own SQLite db for run history, events, logs.
+    pub runs_db: String,
+    /// `opencode.db` — opencode CLI's session storage. We read it for the
+    /// History tab's Conversation view; opencode itself owns the writes.
+    pub opencode_session_db: String,
+}
+
+#[tauri::command]
+pub fn storage_paths(state: State<'_, AppState>) -> Result<StoragePaths, String> {
+    Ok(StoragePaths {
+        config_path: state.config_path.display().to_string(),
+        runs_db: state.db_path.display().to_string(),
+        opencode_session_db: storage::db_path().display().to_string(),
+    })
+}
+
 // ---------- opencode CLI ----------
 
 #[derive(Serialize)]

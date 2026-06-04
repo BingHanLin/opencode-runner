@@ -16,4 +16,7 @@ pub struct AppState {
     pub registry: CancelRegistry,
     pub scheduler: Mutex<Option<Scheduler>>,
     pub config_path: PathBuf,
+    /// Path to the run-history sqlite db we own. Surfaced read-only via the
+    /// `storage_paths` command so the Settings panel can show where things live.
+    pub db_path: PathBuf,
 }

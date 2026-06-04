@@ -13,6 +13,7 @@ import type {
   RunEvent,
   RunLog,
   RunUpdate,
+  StoragePaths,
   TasksFile,
 } from "./types";
 
@@ -38,6 +39,7 @@ export const api = {
   isGitRepoPath: (path: string) =>
     invoke<boolean>("is_git_repo_path", { path }),
   showMainWindow: () => invoke<void>("show_main_window"),
+  storagePaths: () => invoke<StoragePaths>("storage_paths"),
 };
 
 export async function pickDirectory(): Promise<string | null> {
