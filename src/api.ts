@@ -32,6 +32,8 @@ export const api = {
   listModels: () => invoke<Model[]>("list_models"),
   runNow: (taskId: string) => invoke<void>("run_now", { taskId }),
   abortRun: (runId: number) => invoke<void>("abort_run", { runId }),
+  clearRunsForTask: (taskId: string) =>
+    invoke<number>("clear_runs_for_task", { taskId }),
   restartScheduler: () => invoke<void>("restart_scheduler"),
   isGitRepoPath: (path: string) =>
     invoke<boolean>("is_git_repo_path", { path }),

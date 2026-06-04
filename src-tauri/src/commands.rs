@@ -72,6 +72,14 @@ pub fn list_events(state: State<'_, AppState>, run_id: i64) -> Result<Vec<RunEve
 }
 
 #[tauri::command]
+pub fn clear_runs_for_task(
+    state: State<'_, AppState>,
+    task_id: String,
+) -> Result<u64, String> {
+    state.db.clear_finished_runs_for_task(&task_id).map_err(s)
+}
+
+#[tauri::command]
 pub fn list_logs(
     state: State<'_, AppState>,
     run_id: i64,

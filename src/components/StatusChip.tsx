@@ -1,3 +1,5 @@
+import { describeSchedule } from "../cronDescribe";
+
 interface Props {
   status: string;
   label?: string;
@@ -24,16 +26,13 @@ function chipTone(status: string): string {
 }
 
 export function ScheduleChip({ schedule }: { schedule: string }) {
-  let label: string;
   let tone = "";
-  if (schedule.startsWith("cron:")) {
-    label = schedule.slice(5);
-    tone = "accent";
-  } else if (schedule.startsWith("once:")) {
-    label = `once · ${schedule.slice(5)}`;
-    tone = "info";
-  } else {
-    label = "manual";
-  }
-  return <span className={`chip ${tone}`}>{label}</span>;
+  if (schedule.startsWith("cron:")) tone = "accent";
+  else if (schedule.startsWith("once:")) tone = "info";
+  const label = describeSchedule(schedule);
+  return (
+    <span className={`chip ${tone}`} title={schedule}>
+      {label}
+    </span>
+  );
 }

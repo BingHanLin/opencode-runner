@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
 use serde::Serialize;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -224,6 +224,54 @@ impl Db {
             out.push(r?);
         }
         Ok(out)
+    }
+
+    /// Drop history for a task: every finished run plus its associated step
+    /// events and log lines. In-flight runs (status == 'running') are kept
+    /// untouched so a user clicking Clear mid-run doesn't blow away state the
+    /// runner is still writing to. Returns the number of runs removed.
+    pub fn clear_finished_runs_for_task(&self, task_id: &str) -> Result<u64> {
+        let mut conn = self.inner.lock().unwrap();
+        let tx = conn.transaction()?;
+        let ids: Vec<i64> = {
+            let mut stmt = tx.prepare(
+                "SELECT id FROM runs WHERE task_id = ?1 AND status != 'running'",
+            )?;
+            let rows = stmt.query_map(params![task_id], |r| r.get::<_, i64>(0))?;
+            let mut out = Vec::new();
+            for r in rows {
+                out.push(r?);
+            }
+            out
+        };
+        if ids.is_empty() {
+            tx.commit()?;
+            return Ok(0);
+        }
+        // rusqlite doesn't bind a Vec directly to an IN clause; expand the
+        // placeholders ourselves and pass the ids via `params_from_iter`.
+        // Safe because `ids` come from our own query, not user input.
+        let mut placeholders = String::with_capacity(ids.len() * 2);
+        for i in 0..ids.len() {
+            if i > 0 {
+                placeholders.push(',');
+            }
+            placeholders.push('?');
+        }
+        tx.execute(
+            &format!("DELETE FROM run_logs   WHERE run_id IN ({placeholders})"),
+            params_from_iter(ids.iter()),
+        )?;
+        tx.execute(
+            &format!("DELETE FROM run_events WHERE run_id IN ({placeholders})"),
+            params_from_iter(ids.iter()),
+        )?;
+        let removed = tx.execute(
+            &format!("DELETE FROM runs       WHERE id     IN ({placeholders})"),
+            params_from_iter(ids.iter()),
+        )?;
+        tx.commit()?;
+        Ok(removed as u64)
     }
 
     #[allow(dead_code)]

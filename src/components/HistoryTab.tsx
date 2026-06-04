@@ -15,7 +15,7 @@ import type {
   RunUpdate,
   Task,
 } from "../types";
-import { RefreshIcon, SquareIcon } from "./Icon";
+import { RefreshIcon, SquareIcon, TrashIcon } from "./Icon";
 import { StatusChip } from "./StatusChip";
 
 const LOG_BUFFER_MAX = 800;
@@ -33,6 +33,8 @@ export function HistoryTab({ task, events }: Props) {
   const [convo, setConvo] = useState<MessagePair[] | null>(null);
   const [convoError, setConvoError] = useState<string | null>(null);
   const [logs, setLogs] = useState<RunLog[]>([]);
+  const [confirmClear, setConfirmClear] = useState(false);
+  const [clearing, setClearing] = useState(false);
 
   const reload = useCallback(async () => {
     const list = await api.listRunsForTask(task.id, 100);
@@ -47,8 +49,27 @@ export function HistoryTab({ task, events }: Props) {
     setRunEvents([]);
     setConvo(null);
     setLogs([]);
+    setConfirmClear(false);
     reload();
   }, [task.id]);
+
+  async function clearHistory() {
+    setClearing(true);
+    try {
+      await api.clearRunsForTask(task.id);
+      setActiveRunId(null);
+      setRunEvents([]);
+      setLogs([]);
+      setConvo(null);
+      setConvoError(null);
+      const list = await api.listRunsForTask(task.id, 100);
+      setRuns(list);
+      if (list.length > 0) setActiveRunId(list[0].id);
+    } finally {
+      setClearing(false);
+      setConfirmClear(false);
+    }
+  }
 
   // React to backend RunUpdate events — refresh the run list whenever a run
   // for this task starts or finishes, refresh the event timeline whenever a
@@ -179,27 +200,60 @@ export function HistoryTab({ task, events }: Props) {
             <span className="section-title" style={{ margin: 0 }}>
               Runs · {runs.length}
             </span>
-            <button
-              className="btn ghost icon"
-              onClick={reload}
-              aria-label="Refresh runs"
-              title="Refresh"
-            >
-              <RefreshIcon size={15} />
-            </button>
+            <div className="row" style={{ gap: 4 }}>
+              {confirmClear ? (
+                <>
+                  <button
+                    className="btn danger"
+                    style={{ padding: "4px 8px", fontSize: 11.5 }}
+                    onClick={clearHistory}
+                    disabled={clearing}
+                  >
+                    {clearing ? "Clearing…" : "Confirm clear"}
+                  </button>
+                  <button
+                    className="btn"
+                    style={{ padding: "4px 8px", fontSize: 11.5 }}
+                    onClick={() => setConfirmClear(false)}
+                    disabled={clearing}
+                  >
+                    Cancel
+                  </button>
+                </>
+              ) : (
+                <button
+                  className="btn ghost icon"
+                  onClick={() => setConfirmClear(true)}
+                  aria-label="Clear history"
+                  title="Clear finished runs for this task"
+                  disabled={runs.length === 0}
+                >
+                  <TrashIcon size={15} />
+                </button>
+              )}
+              <button
+                className="btn ghost icon"
+                onClick={reload}
+                aria-label="Refresh runs"
+                title="Refresh"
+              >
+                <RefreshIcon size={15} />
+              </button>
+            </div>
           </div>
           {runs.length === 0 ? (
             <div className="empty-state">No runs yet for this task.</div>
           ) : (
             <div className="run-list">
-              {runs.map((r) => (
+              {runs.map((r, i) => (
                 <div
                   key={r.id}
                   className={`run-card ${activeRunId === r.id ? "active" : ""}`}
                   onClick={() => setActiveRunId(r.id)}
+                  title={`db id #${r.id}`}
                 >
                   <div className="run-row">
-                    <span>#{r.id}</span>
+                    <span>#{runs.length - i}</span>
                     <StatusChip status={r.status} />
                   </div>
                   <div className="run-meta">
@@ -215,6 +269,13 @@ export function HistoryTab({ task, events }: Props) {
           {activeRun ? (
             <RunDetails
               run={activeRun}
+              seq={
+                runs.length -
+                Math.max(
+                  0,
+                  runs.findIndex((r) => r.id === activeRun.id),
+                )
+              }
               events={runEvents}
               logs={logs}
               conversation={convo}
@@ -235,6 +296,7 @@ export function HistoryTab({ task, events }: Props) {
 
 function RunDetails({
   run,
+  seq,
   events,
   logs,
   conversation,
@@ -245,6 +307,7 @@ function RunDetails({
   onAbort,
 }: {
   run: Run;
+  seq: number;
   events: RunEvent[];
   logs: RunLog[];
   conversation: MessagePair[] | null;
@@ -259,7 +322,10 @@ function RunDetails({
       <div className="sticky-bar run-detail-header">
         <div className="row" style={{ gap: 8 }}>
           <span className="content-title" style={{ fontSize: 16 }}>
-            Run #{run.id}
+            Run #{seq}
+          </span>
+          <span className="help" title="Internal db id">
+            db #{run.id}
           </span>
           <StatusChip status={run.status} />
         </div>

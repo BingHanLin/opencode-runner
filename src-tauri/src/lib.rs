@@ -55,6 +55,7 @@ pub fn run() {
             commands::list_runs_for_task,
             commands::list_events,
             commands::list_logs,
+            commands::clear_runs_for_task,
             commands::load_conversation,
             commands::opencode_binary_status,
             commands::list_models,
