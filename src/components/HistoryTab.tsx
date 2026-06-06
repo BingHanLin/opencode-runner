@@ -263,6 +263,15 @@ export function HistoryTab({ task, events }: Props) {
                   <div className="run-row">
                     <span>#{runs.length - i}</span>
                     <StatusChip status={r.status} />
+                    {stallInfo(r, now).stalled && (
+                      <span
+                        className="chip"
+                        style={{ color: "var(--error)" }}
+                        title="Killed after a long silence — likely a stalled model stream or hung tool call, not real work"
+                      >
+                        stalled
+                      </span>
+                    )}
                   </div>
                   <div className="run-meta">
                     started {formatTime(r.started_at)} · {duration(r, now)}
@@ -325,17 +334,7 @@ function RunDetails({
   onToggleEvent: (id: number) => void;
   onAbort: () => void;
 }) {
-  // Stall detection: a killed run whose last captured output is far from its
-  // end was blocked waiting, not busy. `logs` is a tail but its last entry is
-  // always the most recent line, so this holds even for chatty-then-stuck runs.
-  const startMs = new Date(run.started_at).getTime();
-  const lastActivityMs = logs.length
-    ? new Date(logs[logs.length - 1].ts).getTime()
-    : startMs;
-  const endMs = run.finished_at ? new Date(run.finished_at).getTime() : now;
-  const silentMs = endMs - lastActivityMs;
-  const endedAbnormally = run.status === "aborted" || run.status === "error";
-  const stalled = endedAbnormally && silentMs > STALL_SILENCE_MS;
+  const stall = stallInfo(run, now);
 
   return (
     <div className="run-details">
@@ -374,7 +373,7 @@ function RunDetails({
         </div>
       )}
 
-      {stalled && (
+      {stall.stalled && (
         <div
           className="section"
           style={{ borderColor: "rgba(236,113,109,0.4)" }}
@@ -383,10 +382,10 @@ function RunDetails({
             Stalled
           </div>
           <div className="conv-text">
-            Active for {humanizeMs(lastActivityMs - startMs)} of{" "}
-            {humanizeMs(endMs - startMs)} — no output for{" "}
-            {humanizeMs(silentMs)} before it was stopped. opencode was blocked
-            waiting (a stalled model stream or a hung tool call), not doing work.
+            Active for {humanizeMs(stall.activeMs)} of {humanizeMs(stall.wallMs)}{" "}
+            — no output for {humanizeMs(stall.silentMs)} before it was stopped.
+            opencode was blocked waiting (a stalled model stream or a hung tool
+            call), not doing work.
           </div>
         </div>
       )}
@@ -717,6 +716,29 @@ function duration(r: Run, now: number): string {
 function stepDuration(e: RunEvent, now: number): string {
   const end = e.finished_at ? new Date(e.finished_at).getTime() : now;
   return humanizeMs(end - new Date(e.started_at).getTime());
+}
+
+// A run killed (aborted/error) after a long trailing silence was blocked
+// waiting — a stalled model stream or hung tool call — rather than busy.
+// `last_activity_at` is the backend's MAX(run_logs.ts); the gap to
+// `finished_at` is how long opencode emitted nothing before being stopped.
+function stallInfo(
+  run: Run,
+  now: number,
+): { stalled: boolean; silentMs: number; activeMs: number; wallMs: number } {
+  const startMs = new Date(run.started_at).getTime();
+  const lastActivityMs = run.last_activity_at
+    ? new Date(run.last_activity_at).getTime()
+    : startMs;
+  const endMs = run.finished_at ? new Date(run.finished_at).getTime() : now;
+  const endedAbnormally = run.status === "aborted" || run.status === "error";
+  const silentMs = endMs - lastActivityMs;
+  return {
+    stalled: endedAbnormally && silentMs > STALL_SILENCE_MS,
+    silentMs,
+    activeMs: lastActivityMs - startMs,
+    wallMs: endMs - startMs,
+  };
 }
 
 function humanizeMs(ms: number): string {

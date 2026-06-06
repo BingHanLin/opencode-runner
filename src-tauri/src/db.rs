@@ -15,6 +15,11 @@ pub struct Run {
     pub finished_at: Option<DateTime<Utc>>,
     pub status: String, // "running", "ok", "error"
     pub error: Option<String>,
+    /// Timestamp of this run's most recent log line (`MAX(run_logs.ts)`), or
+    /// `None` if it produced no output. The UI compares it against
+    /// `finished_at` to flag runs that were killed after a long silence — a
+    /// stalled model stream or hung tool call rather than genuine work.
+    pub last_activity_at: Option<DateTime<Utc>>,
 }
 
 /// One phase of a run — e.g. "Worktree: git fetch --all" or "Run opencode".
@@ -131,7 +136,8 @@ impl Db {
     pub fn list_recent(&self, limit: i64) -> Result<Vec<Run>> {
         let conn = self.inner.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, task_id, session_id, project_id, started_at, finished_at, status, error
+            "SELECT id, task_id, session_id, project_id, started_at, finished_at, status, error,
+                    (SELECT MAX(ts) FROM run_logs WHERE run_id = runs.id) AS last_activity_at
              FROM runs ORDER BY id DESC LIMIT ?1",
         )?;
         let rows = stmt.query_map(params![limit], row_to_run)?;
@@ -145,7 +151,8 @@ impl Db {
     pub fn list_recent_for_task(&self, task_id: &str, limit: i64) -> Result<Vec<Run>> {
         let conn = self.inner.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, task_id, session_id, project_id, started_at, finished_at, status, error
+            "SELECT id, task_id, session_id, project_id, started_at, finished_at, status, error,
+                    (SELECT MAX(ts) FROM run_logs WHERE run_id = runs.id) AS last_activity_at
              FROM runs WHERE task_id = ?1 ORDER BY id DESC LIMIT ?2",
         )?;
         let rows = stmt.query_map(params![task_id, limit], row_to_run)?;
@@ -278,7 +285,8 @@ impl Db {
     pub fn get_run(&self, id: i64) -> Result<Option<Run>> {
         let conn = self.inner.lock().unwrap();
         let mut stmt = conn.prepare(
-            "SELECT id, task_id, session_id, project_id, started_at, finished_at, status, error
+            "SELECT id, task_id, session_id, project_id, started_at, finished_at, status, error,
+                    (SELECT MAX(ts) FROM run_logs WHERE run_id = runs.id) AS last_activity_at
              FROM runs WHERE id = ?1",
         )?;
         let row = stmt.query_row(params![id], row_to_run).optional()?;
@@ -289,6 +297,7 @@ impl Db {
 fn row_to_run(row: &rusqlite::Row<'_>) -> rusqlite::Result<Run> {
     let started_at_s: String = row.get(4)?;
     let finished_at_s: Option<String> = row.get(5)?;
+    let last_activity_s: Option<String> = row.get(8)?;
     Ok(Run {
         id: row.get(0)?,
         task_id: row.get(1)?,
@@ -298,6 +307,7 @@ fn row_to_run(row: &rusqlite::Row<'_>) -> rusqlite::Result<Run> {
         finished_at: finished_at_s.as_deref().map(parse_rfc3339),
         status: row.get(6)?,
         error: row.get(7)?,
+        last_activity_at: last_activity_s.as_deref().map(parse_rfc3339),
     })
 }
 

@@ -37,6 +37,9 @@ export interface Run {
   finished_at: string | null;
   status: string;
   error: string | null;
+  /** Timestamp of the run's most recent log line, or null if it produced no
+   * output. Used to flag runs killed after a long silence (a stall). */
+  last_activity_at: string | null;
 }
 
 export interface RunEvent {
