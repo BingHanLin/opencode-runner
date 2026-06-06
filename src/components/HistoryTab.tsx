@@ -20,6 +20,14 @@ import { StatusChip } from "./StatusChip";
 
 const LOG_BUFFER_MAX = 800;
 
+// A run that was killed (aborted/error) but emitted nothing for this long
+// before the end was blocked waiting — a stalled model stream or a hung tool
+// call — not doing work. We surface that as "Stalled" so a timeout that was
+// really a hang reads differently from one that genuinely ran out of time.
+// 10 min is generous enough that a single long model turn (opencode emits no
+// per-token output) won't trip it; real stalls run tens of minutes.
+const STALL_SILENCE_MS = 10 * 60_000;
+
 interface Props {
   task: Task;
   /** Incoming RunUpdate events for any task; we filter to this task's runs. */
@@ -317,6 +325,18 @@ function RunDetails({
   onToggleEvent: (id: number) => void;
   onAbort: () => void;
 }) {
+  // Stall detection: a killed run whose last captured output is far from its
+  // end was blocked waiting, not busy. `logs` is a tail but its last entry is
+  // always the most recent line, so this holds even for chatty-then-stuck runs.
+  const startMs = new Date(run.started_at).getTime();
+  const lastActivityMs = logs.length
+    ? new Date(logs[logs.length - 1].ts).getTime()
+    : startMs;
+  const endMs = run.finished_at ? new Date(run.finished_at).getTime() : now;
+  const silentMs = endMs - lastActivityMs;
+  const endedAbnormally = run.status === "aborted" || run.status === "error";
+  const stalled = endedAbnormally && silentMs > STALL_SILENCE_MS;
+
   return (
     <div className="run-details">
       <div className="sticky-bar run-detail-header">
@@ -351,6 +371,23 @@ function RunDetails({
             Error
           </div>
           <div className="conv-text mono">{run.error}</div>
+        </div>
+      )}
+
+      {stalled && (
+        <div
+          className="section"
+          style={{ borderColor: "rgba(236,113,109,0.4)" }}
+        >
+          <div className="section-title" style={{ color: "var(--error)" }}>
+            Stalled
+          </div>
+          <div className="conv-text">
+            Active for {humanizeMs(lastActivityMs - startMs)} of{" "}
+            {humanizeMs(endMs - startMs)} — no output for{" "}
+            {humanizeMs(silentMs)} before it was stopped. opencode was blocked
+            waiting (a stalled model stream or a hung tool call), not doing work.
+          </div>
         </div>
       )}
 
