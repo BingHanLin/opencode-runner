@@ -5,6 +5,7 @@ pub mod commands;
 pub mod config;
 pub mod db;
 pub mod opencode;
+pub mod proc;
 pub mod runner;
 pub mod scheduler;
 pub mod state;

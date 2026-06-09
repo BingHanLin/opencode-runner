@@ -354,8 +354,8 @@ struct WorktreeHandle {
 
 impl WorktreeHandle {
     async fn cleanup(self) -> Result<()> {
-        let out = Command::new("git")
-            .arg("-C")
+        let mut cmd = Command::new("git");
+        cmd.arg("-C")
             .arg(&self.repo)
             .arg("worktree")
             .arg("remove")
@@ -363,9 +363,9 @@ impl WorktreeHandle {
             .arg(&self.path)
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .output()
-            .await?;
+            .stderr(Stdio::piped());
+        crate::proc::no_window(&mut cmd);
+        let out = cmd.output().await?;
         if !out.status.success() {
             tracing::warn!(
                 "git worktree remove failed for {:?}: {}",
@@ -405,16 +405,16 @@ async fn prepare_worktree(
 
     if let Some(b) = base {
         let evt = ctx.start_event(run_id, "Worktree: git fetch --all");
-        let fetch = Command::new("git")
-            .arg("-C")
+        let mut cmd = Command::new("git");
+        cmd.arg("-C")
             .arg(&task.working_dir)
             .arg("fetch")
             .arg("--all")
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
-            .output()
-            .await?;
+            .stderr(Stdio::piped());
+        crate::proc::no_window(&mut cmd);
+        let fetch = cmd.output().await?;
         if !fetch.status.success() {
             let msg = format!(
                 "exit {:?}: {}",
@@ -431,8 +431,8 @@ async fn prepare_worktree(
         }
 
         let evt = ctx.start_event(run_id, &format!("Worktree: verify base `{b}`"));
-        let verify = Command::new("git")
-            .arg("-C")
+        let mut cmd = Command::new("git");
+        cmd.arg("-C")
             .arg(&task.working_dir)
             .arg("rev-parse")
             .arg("--verify")
@@ -440,9 +440,9 @@ async fn prepare_worktree(
             .arg(format!("{b}^{{commit}}"))
             .stdin(Stdio::null())
             .stdout(Stdio::null())
-            .stderr(Stdio::piped())
-            .output()
-            .await?;
+            .stderr(Stdio::piped());
+        crate::proc::no_window(&mut cmd);
+        let verify = cmd.output().await?;
         if !verify.status.success() {
             let msg = format!(
                 "ref {b:?} not found after fetch — check the ref name (remote refs use `<remote>/<branch>` form)"
@@ -479,12 +479,11 @@ async fn prepare_worktree(
     if let Some(b) = base {
         add.arg(b);
     }
-    let out = add
-        .stdin(Stdio::null())
+    add.stdin(Stdio::null())
         .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .output()
-        .await?;
+        .stderr(Stdio::piped());
+    crate::proc::no_window(&mut add);
+    let out = add.output().await?;
     if !out.status.success() {
         let msg = format!(
             "exit {:?}: {}",
@@ -574,17 +573,14 @@ async fn apply_worktree_include(repo: &Path, worktree: &Path) -> Result<()> {
 }
 
 async fn is_git_ignored(repo: &Path, rel: &str) -> bool {
-    matches!(
-        Command::new("git")
-            .arg("-C").arg(repo)
-            .arg("check-ignore").arg("-q").arg("--").arg(rel)
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null())
-            .status()
-            .await,
-        Ok(s) if s.success()
-    )
+    let mut cmd = Command::new("git");
+    cmd.arg("-C").arg(repo)
+        .arg("check-ignore").arg("-q").arg("--").arg(rel)
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+    crate::proc::no_window(&mut cmd);
+    matches!(cmd.status().await, Ok(s) if s.success())
 }
 
 fn copy_recursive_sync(src: &Path, dst: &Path) -> std::io::Result<()> {

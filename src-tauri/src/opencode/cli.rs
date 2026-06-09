@@ -81,11 +81,13 @@ impl Cli {
 impl Cli {
     /// `opencode models` — one `<providerID>/<modelID>` per line.
     pub async fn list_models(&self) -> Result<Vec<Model>> {
-        let out = Command::new(&self.binary)
-            .arg("models")
+        let mut cmd = Command::new(&self.binary);
+        cmd.arg("models")
             .stdin(Stdio::null())
             .stdout(Stdio::piped())
-            .stderr(Stdio::piped())
+            .stderr(Stdio::piped());
+        crate::proc::no_window(&mut cmd);
+        let out = cmd
             .output()
             .await
             .with_context(|| format!("running `{} models`", self.binary))?;
@@ -158,6 +160,7 @@ impl Cli {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .kill_on_drop(true);
+        crate::proc::no_window(&mut cmd);
 
         let mut child = cmd
             .spawn()
