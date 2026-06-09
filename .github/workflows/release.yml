@@ -42,6 +42,26 @@ jobs:
           node-version: 20
           cache: npm
 
+      # Make the pushed tag the single source of truth for the version.
+      # tauri-action derives the installer filename + bundle version from
+      # tauri.conf.json (falling back to Cargo.toml), NOT from the git tag,
+      # so without this a `v0.2.1` tag would still produce `0.2.0` artifacts
+      # whenever the manifests weren't manually bumped. This rewrites all
+      # three manifests to match `vX.Y.Z` before the build. Runs on both
+      # runners (shell: bash works on the Windows runner via Git Bash).
+      - name: Sync version from tag
+        if: startsWith(github.ref, 'refs/tags/v')
+        shell: bash
+        run: |
+          VERSION="${GITHUB_REF_NAME#v}"
+          echo "Syncing manifests to version $VERSION"
+          npm version "$VERSION" --no-git-tag-version --allow-same-version
+          node -e "const f='src-tauri/tauri.conf.json';const j=require('./'+f);j.version='$VERSION';require('fs').writeFileSync(f,JSON.stringify(j,null,2)+'\n')"
+          # Replace only the first `version = "..."` (the [package] version).
+          sed -i -E '0,/^version = ".*"/s//version = "'"$VERSION"'"/' src-tauri/Cargo.toml
+          echo "tauri.conf.json -> $(node -p "require('./src-tauri/tauri.conf.json').version")"
+          grep -m1 '^version' src-tauri/Cargo.toml
+
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
