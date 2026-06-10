@@ -5,6 +5,7 @@
 // so the parent doesn't need to know about the widget shape.
 
 import { useEffect, useMemo, useState } from "react";
+import { describeCron } from "../cronDescribe";
 
 type Kind = "manual" | "cron" | "once";
 
@@ -407,6 +408,11 @@ function CronEditor({
               onChange={(e) => onChange(e.target.value)}
             />
           </div>
+          {expr.trim() && (
+            <div className="help" style={{ marginTop: 8 }}>
+              In plain English: <strong>{describeCron(expr)}</strong>
+            </div>
+          )}
           <div className="help">
             Quartz can't accept specific values in both <em>day-of-month</em> and{" "}
             <em>day-of-week</em> at the same time — use <code>?</code> in the
