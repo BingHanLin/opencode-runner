@@ -6,6 +6,7 @@ import {
   type UIEvent,
 } from "react";
 import { api } from "../api";
+import { useT } from "../LanguageProvider";
 import type {
   ConversationPart,
   MessagePair,
@@ -35,6 +36,7 @@ interface Props {
 }
 
 export function HistoryTab({ task, events }: Props) {
+  const t = useT();
   const [runs, setRuns] = useState<Run[]>([]);
   const [activeRunId, setActiveRunId] = useState<number | null>(null);
   const [runEvents, setRunEvents] = useState<RunEvent[]>([]);
@@ -206,7 +208,7 @@ export function HistoryTab({ task, events }: Props) {
         <div className="history-left">
           <div className="sticky-bar history-list-header">
             <span className="section-title" style={{ margin: 0 }}>
-              Runs · {runs.length}
+              {t("hist.runs", { count: runs.length })}
             </span>
             <div className="row" style={{ gap: 4 }}>
               {confirmClear ? (
@@ -217,7 +219,7 @@ export function HistoryTab({ task, events }: Props) {
                     onClick={clearHistory}
                     disabled={clearing}
                   >
-                    {clearing ? "Clearing…" : "Confirm clear"}
+                    {clearing ? t("hist.clearing") : t("hist.confirmClear")}
                   </button>
                   <button
                     className="btn"
@@ -225,15 +227,15 @@ export function HistoryTab({ task, events }: Props) {
                     onClick={() => setConfirmClear(false)}
                     disabled={clearing}
                   >
-                    Cancel
+                    {t("btn.cancel")}
                   </button>
                 </>
               ) : (
                 <button
                   className="btn ghost icon"
                   onClick={() => setConfirmClear(true)}
-                  aria-label="Clear history"
-                  title="Clear finished runs for this task"
+                  aria-label={t("hist.clearAria")}
+                  title={t("hist.clearTitle")}
                   disabled={runs.length === 0}
                 >
                   <TrashIcon size={15} />
@@ -242,15 +244,15 @@ export function HistoryTab({ task, events }: Props) {
               <button
                 className="btn ghost icon"
                 onClick={reload}
-                aria-label="Refresh runs"
-                title="Refresh"
+                aria-label={t("hist.refreshAria")}
+                title={t("hist.refreshTitle")}
               >
                 <RefreshIcon size={15} />
               </button>
             </div>
           </div>
           {runs.length === 0 ? (
-            <div className="empty-state">No runs yet for this task.</div>
+            <div className="empty-state">{t("hist.noRuns")}</div>
           ) : (
             <div className="run-list">
               {runs.map((r, i) => (
@@ -267,14 +269,17 @@ export function HistoryTab({ task, events }: Props) {
                       <span
                         className="chip"
                         style={{ color: "var(--error)" }}
-                        title="Killed after a long silence — likely a stalled model stream or hung tool call, not real work"
+                        title={t("hist.stalledChipTitle")}
                       >
-                        stalled
+                        {t("hist.stalled")}
                       </span>
                     )}
                   </div>
                   <div className="run-meta">
-                    started {formatTime(r.started_at)} · {duration(r, now)}
+                    {t("hist.startedMeta", {
+                      time: formatTime(r.started_at),
+                      duration: duration(r, now),
+                    })}
                   </div>
                 </div>
               ))}
@@ -303,7 +308,7 @@ export function HistoryTab({ task, events }: Props) {
               onAbort={() => api.abortRun(activeRun.id)}
             />
           ) : (
-            <div className="empty-state">Select a run on the left.</div>
+            <div className="empty-state">{t("hist.selectRun")}</div>
           )}
         </div>
       </div>
@@ -334,6 +339,7 @@ function RunDetails({
   onToggleEvent: (id: number) => void;
   onAbort: () => void;
 }) {
+  const t = useT();
   const stall = stallInfo(run, now);
 
   return (
@@ -341,24 +347,24 @@ function RunDetails({
       <div className="sticky-bar run-detail-header">
         <div className="row" style={{ gap: 8 }}>
           <span className="content-title" style={{ fontSize: 16 }}>
-            Run #{seq}
+            {t("hist.runSeq", { seq })}
           </span>
-          <span className="help" title="Internal db id">
-            db #{run.id}
+          <span className="help" title={t("hist.dbIdTitle")}>
+            {t("hist.dbId", { id: run.id })}
           </span>
           <StatusChip status={run.status} />
         </div>
         {run.status === "running" && (
           <button className="btn danger" onClick={onAbort}>
-            <SquareIcon size={13} /> Stop
+            <SquareIcon size={13} /> {t("hist.stop")}
           </button>
         )}
       </div>
 
       <div className="help" style={{ marginBottom: 12 }}>
-        started {formatTime(run.started_at)}
-        {run.finished_at && ` · finished ${formatTime(run.finished_at)}`}
-        {run.session_id && ` · session ${run.session_id}`}
+        {t("hist.started", { time: formatTime(run.started_at) })}
+        {run.finished_at && t("hist.finished", { time: formatTime(run.finished_at) })}
+        {run.session_id && t("hist.session", { id: run.session_id })}
       </div>
 
       {run.error && (
@@ -367,7 +373,7 @@ function RunDetails({
           style={{ borderColor: "rgba(236,113,109,0.4)" }}
         >
           <div className="section-title" style={{ color: "var(--error)" }}>
-            Error
+            {t("hist.error")}
           </div>
           <div className="conv-text mono">{run.error}</div>
         </div>
@@ -379,24 +385,25 @@ function RunDetails({
           style={{ borderColor: "rgba(236,113,109,0.4)" }}
         >
           <div className="section-title" style={{ color: "var(--error)" }}>
-            Stalled
+            {t("hist.stalledSection")}
           </div>
           <div className="conv-text">
-            Active for {humanizeMs(stall.activeMs)} of {humanizeMs(stall.wallMs)}{" "}
-            — no output for {humanizeMs(stall.silentMs)} before it was stopped.
-            opencode was blocked waiting (a stalled model stream or a hung tool
-            call), not doing work.
+            {t("hist.stalledBody", {
+              active: humanizeMs(stall.activeMs),
+              wall: humanizeMs(stall.wallMs),
+              silent: humanizeMs(stall.silentMs),
+            })}
           </div>
         </div>
       )}
 
       <section className="section">
-        <div className="section-title">Steps</div>
+        <div className="section-title">{t("hist.steps")}</div>
         {events.length === 0 ? (
           <div className="help">
             {run.status === "running"
-              ? "Waiting for first step…"
-              : "No steps recorded."}
+              ? t("hist.waitingFirstStep")
+              : t("hist.noSteps")}
           </div>
         ) : (
           events.map((e) => {
@@ -410,7 +417,7 @@ function RunDetails({
                   onClick={() => hasMore && onToggleEvent(e.id)}
                   aria-expanded={hasMore ? expanded : undefined}
                   disabled={!hasMore}
-                  title={hasMore ? (expanded ? "Collapse" : "Expand") : ""}
+                  title={hasMore ? (expanded ? t("hist.collapse") : t("hist.expand")) : ""}
                 >
                   <span className="event-arrow">
                     {hasMore ? (expanded ? "▾" : "▸") : ""}
@@ -432,22 +439,22 @@ function RunDetails({
       <LogsSection logs={logs} live={run.status === "running"} />
 
       <section className="section section-conversation">
-        <div className="section-title">Conversation</div>
+        <div className="section-title">{t("hist.conversation")}</div>
         {!run.session_id ? (
           <div className="help">
             {run.status === "running"
-              ? "Waiting for opencode to allocate a session…"
-              : "No session id captured for this run."}
+              ? t("hist.convo.waitingSession")
+              : t("hist.convo.noSession")}
           </div>
         ) : conversationError ? (
           <div className="error-text">{conversationError}</div>
         ) : conversation === null ? (
-          <div className="help">Loading…</div>
+          <div className="help">{t("hist.convo.loading")}</div>
         ) : conversation.length === 0 ? (
           <div className="help">
             {run.status === "running"
-              ? "Streaming — first message will appear shortly…"
-              : "Conversation is empty."}
+              ? t("hist.convo.streaming")
+              : t("hist.convo.empty")}
           </div>
         ) : (
           conversation.map((pair, i) => (
@@ -472,6 +479,7 @@ function RunDetails({
 // ============================================================================
 
 function LogsSection({ logs, live }: { logs: RunLog[]; live: boolean }) {
+  const t = useT();
   const [expanded, setExpanded] = useState(false);
   const [stickToBottom, setStickToBottom] = useState(true);
   const boxRef = useRef<HTMLPreElement | null>(null);
@@ -497,10 +505,11 @@ function LogsSection({ logs, live }: { logs: RunLog[]; live: boolean }) {
   const summary =
     logs.length === 0
       ? live
-        ? "waiting…"
-        : "no output captured"
-      : `${logs.length} line${logs.length === 1 ? "" : "s"}` +
-        (counts.stderr > 0 ? ` · ${counts.stderr} stderr` : "");
+        ? t("hist.logs.waiting")
+        : t("hist.logs.none")
+      : t(logs.length === 1 ? "hist.logs.linesOne" : "hist.logs.linesMany", {
+          count: logs.length,
+        }) + (counts.stderr > 0 ? t("hist.logs.stderr", { count: counts.stderr }) : "");
 
   return (
     <section className="section">
@@ -512,7 +521,7 @@ function LogsSection({ logs, live }: { logs: RunLog[]; live: boolean }) {
       >
         <span className="event-arrow">{expanded ? "▾" : "▸"}</span>
         <span className="section-title" style={{ margin: 0 }}>
-          Output
+          {t("hist.output")}
         </span>
         <span className="help logs-summary">{summary}</span>
         {live && expanded && !stickToBottom && (
@@ -524,9 +533,9 @@ function LogsSection({ logs, live }: { logs: RunLog[]; live: boolean }) {
               const el = boxRef.current;
               if (el) el.scrollTop = el.scrollHeight;
             }}
-            title="Scroll to bottom"
+            title={t("hist.logs.scrollBottom")}
           >
-            jump to live
+            {t("hist.logs.jumpToLive")}
           </span>
         )}
       </button>
@@ -537,7 +546,7 @@ function LogsSection({ logs, live }: { logs: RunLog[]; live: boolean }) {
           onScroll={onScroll}
         >
           {logs.length === 0 ? (
-            <span className="help">No output captured yet.</span>
+            <span className="help">{t("hist.logs.noneYet")}</span>
           ) : (
             logs.map((l) => (
               <span
@@ -595,16 +604,18 @@ function PlainText({ text }: { text: string }) {
 }
 
 function Reasoning({ text }: { text: string }) {
+  const t = useT();
   if (!text) return null;
   return (
     <div className="conv-part conv-reasoning">
-      <div className="conv-kind">Reasoning</div>
+      <div className="conv-kind">{t("hist.reasoning")}</div>
       <div className="conv-text">{text}</div>
     </div>
   );
 }
 
 function ToolCall({ extra }: { extra: Record<string, unknown> }) {
+  const t = useT();
   const [expanded, setExpanded] = useState(false);
   const toolName = typeof extra.tool === "string" ? extra.tool : "tool";
   const state =
@@ -637,7 +648,7 @@ function ToolCall({ extra }: { extra: Record<string, unknown> }) {
         <div className="tool-body">
           {input != null && (
             <div className="tool-section">
-              <div className="conv-kind">input</div>
+              <div className="conv-kind">{t("hist.tool.input")}</div>
               <pre className="conv-text mono">
                 {typeof input === "string"
                   ? input
@@ -647,7 +658,7 @@ function ToolCall({ extra }: { extra: Record<string, unknown> }) {
           )}
           {output && (
             <div className="tool-section">
-              <div className="conv-kind">output</div>
+              <div className="conv-kind">{t("hist.tool.output")}</div>
               <pre className="conv-text mono">{output}</pre>
             </div>
           )}

@@ -6,6 +6,8 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { describeCron } from "../cronDescribe";
+import { useLang, useT } from "../LanguageProvider";
+import type { Lang, MessageKey } from "../i18n";
 
 type Kind = "manual" | "cron" | "once";
 
@@ -14,13 +16,32 @@ interface Props {
   onChange: (next: string) => void;
 }
 
-const KINDS: { id: Kind; label: string }[] = [
-  { id: "manual", label: "Manual" },
-  { id: "cron", label: "Cron" },
-  { id: "once", label: "Once" },
-];
+const KIND_KEY: Record<Kind, MessageKey> = {
+  manual: "sched.kind.manual",
+  cron: "sched.kind.cron",
+  once: "sched.kind.once",
+};
+const KIND_IDS: Kind[] = ["manual", "cron", "once"];
+
+const PRESET_KEY: Record<CronPreset, MessageKey> = {
+  hourly: "sched.preset.hourly",
+  daily: "sched.preset.daily",
+  weekly: "sched.preset.weekly",
+  monthly: "sched.preset.monthly",
+  custom: "sched.preset.custom",
+};
+const WEEKDAY_KEY: Record<WeekDay, MessageKey> = {
+  MON: "wd.mon",
+  TUE: "wd.tue",
+  WED: "wd.wed",
+  THU: "wd.thu",
+  FRI: "wd.fri",
+  SAT: "wd.sat",
+  SUN: "wd.sun",
+};
 
 export function ScheduleEditor({ schedule, onChange }: Props) {
+  const t = useT();
   const kind: Kind = schedule.startsWith("cron:")
     ? "cron"
     : schedule.startsWith("once:")
@@ -44,22 +65,20 @@ export function ScheduleEditor({ schedule, onChange }: Props) {
   return (
     <>
       <div className="row" style={{ gap: 6, marginBottom: 14 }}>
-        {KINDS.map((k) => (
+        {KIND_IDS.map((id) => (
           <button
-            key={k.id}
+            key={id}
             type="button"
-            className={`btn ${kind === k.id ? "primary" : ""}`}
-            onClick={() => setKind(k.id)}
+            className={`btn ${kind === id ? "primary" : ""}`}
+            onClick={() => setKind(id)}
           >
-            {k.label}
+            {t(KIND_KEY[id])}
           </button>
         ))}
       </div>
 
       {kind === "manual" && (
-        <div className="help">
-          Manual tasks only run when you click <strong>Run now</strong>.
-        </div>
+        <div className="help">{t("sched.manualHelp")}</div>
       )}
 
       {kind === "cron" && (
@@ -79,10 +98,9 @@ export function ScheduleEditor({ schedule, onChange }: Props) {
       {kind !== "manual" && (
         <div className="help" style={{ marginTop: 12 }}>
           <span className="chip accent" style={{ marginRight: 6 }}>
-            local
+            {t("sched.local")}
           </span>
-          Schedules run in your machine's timezone:{" "}
-          <strong>{localTz().name}</strong> ({localTz().offset}).
+          {t("sched.tzHelp", { tz: localTz().name, offset: localTz().offset })}
         </div>
       )}
     </>
@@ -106,9 +124,9 @@ function localTz(): { name: string; offset: string } {
   };
 }
 
-function formatLocalDateTime(d: Date): string {
+function formatLocalDateTime(d: Date, lang: Lang): string {
   try {
-    return new Intl.DateTimeFormat(undefined, {
+    return new Intl.DateTimeFormat(lang, {
       year: "numeric",
       month: "2-digit",
       day: "2-digit",
@@ -133,6 +151,8 @@ function OnceEditor({
   value: string;
   onChange: (v: string) => void;
 }) {
+  const t = useT();
+  const { lang } = useLang();
   const parsed = useMemo(() => parseRfc3339Local(value), [value]);
 
   function emit(date: string, time: string) {
@@ -153,7 +173,7 @@ function OnceEditor({
     <>
       <div className="row" style={{ gap: 10, alignItems: "flex-end" }}>
         <div className="field" style={{ flex: 1, marginBottom: 0 }}>
-          <label className="field-label">Date</label>
+          <label className="field-label">{t("sched.once.date")}</label>
           <input
             type="date"
             className="input"
@@ -162,7 +182,7 @@ function OnceEditor({
           />
         </div>
         <div className="field" style={{ flex: 1, marginBottom: 0 }}>
-          <label className="field-label">Time</label>
+          <label className="field-label">{t("sched.once.time")}</label>
           <input
             type="time"
             className="input"
@@ -173,15 +193,16 @@ function OnceEditor({
       </div>
       {parsed.date && parsed.time && (
         <div className="help" style={{ marginTop: 10 }}>
-          Will fire on{" "}
-          <strong>
-            {formatLocalDateTime(new Date(`${parsed.date}T${parsed.time}:00`))}
-          </strong>
-          .
+          {t("sched.once.willFire", {
+            when: formatLocalDateTime(
+              new Date(`${parsed.date}T${parsed.time}:00`),
+              lang,
+            ),
+          })}
         </div>
       )}
       <div className="help" style={{ marginTop: 4 }}>
-        Stored as <code>{value || "—"}</code>.
+        {t("sched.once.storedAs", { value: value || "—" })}
       </div>
     </>
   );
@@ -245,6 +266,8 @@ function CronEditor({
   expr: string;
   onChange: (next: string) => void;
 }) {
+  const t = useT();
+  const { lang } = useLang();
   const derived = useMemo<CronState>(() => parseCronExpr(expr), [expr]);
   // Local flag so clicking "Custom" sticks. Without it, parseCronExpr would
   // keep round-tripping back to whichever preset the current expression
@@ -292,14 +315,14 @@ function CronEditor({
             className={`btn ${preset === p ? "primary" : ""}`}
             onClick={() => pickPreset(p)}
           >
-            {capitalize(p)}
+            {t(PRESET_KEY[p])}
           </button>
         ))}
       </div>
 
       {preset === "hourly" && (
         <div className="field">
-          <label className="field-label">At minute (0–59)</label>
+          <label className="field-label">{t("sched.atMinute")}</label>
           <input
             type="number"
             min={0}
@@ -316,7 +339,7 @@ function CronEditor({
 
       {preset === "daily" && (
         <div className="field">
-          <label className="field-label">Time</label>
+          <label className="field-label">{t("sched.time")}</label>
           <input
             type="time"
             className="input"
@@ -330,7 +353,7 @@ function CronEditor({
       {preset === "weekly" && (
         <>
           <div className="field">
-            <label className="field-label">Time</label>
+            <label className="field-label">{t("sched.time")}</label>
             <input
               type="time"
               className="input"
@@ -340,7 +363,7 @@ function CronEditor({
             />
           </div>
           <div className="field">
-            <label className="field-label">On days</label>
+            <label className="field-label">{t("sched.onDays")}</label>
             <div className="row" style={{ gap: 6, flexWrap: "wrap" }}>
               {WEEKDAYS.map((d) => {
                 const on = derived.days.includes(d);
@@ -357,7 +380,7 @@ function CronEditor({
                       update({ days: next.length ? next : ["MON"] });
                     }}
                   >
-                    {capitalize(d.toLowerCase())}
+                    {t(WEEKDAY_KEY[d])}
                   </button>
                 );
               })}
@@ -369,7 +392,7 @@ function CronEditor({
       {preset === "monthly" && (
         <div className="row" style={{ gap: 10, alignItems: "flex-end" }}>
           <div className="field" style={{ marginBottom: 0 }}>
-            <label className="field-label">On day (1–31)</label>
+            <label className="field-label">{t("sched.onDay")}</label>
             <input
               type="number"
               min={1}
@@ -383,7 +406,7 @@ function CronEditor({
             />
           </div>
           <div className="field" style={{ marginBottom: 0 }}>
-            <label className="field-label">Time</label>
+            <label className="field-label">{t("sched.time")}</label>
             <input
               type="time"
               className="input"
@@ -398,9 +421,7 @@ function CronEditor({
       {preset === "custom" && (
         <>
           <div className="field">
-            <label className="field-label">
-              Quartz cron expression (6–7 fields: sec min hour day month dow [year])
-            </label>
+            <label className="field-label">{t("sched.custom.label")}</label>
             <input
               className="input"
               value={expr}
@@ -410,25 +431,22 @@ function CronEditor({
           </div>
           {expr.trim() && (
             <div className="help" style={{ marginTop: 8 }}>
-              In plain English: <strong>{describeCron(expr)}</strong>
+              {t("sched.custom.plain", { desc: describeCron(expr, lang) })}
             </div>
           )}
-          <div className="help">
-            Quartz can't accept specific values in both <em>day-of-month</em> and{" "}
-            <em>day-of-week</em> at the same time — use <code>?</code> in the
-            field you aren't constraining.
-          </div>
+          <div className="help">{t("sched.custom.help")}</div>
         </>
       )}
 
       {preset !== "custom" && nextFire(preset, derived) && (
         <div className="help" style={{ marginTop: 10 }}>
-          Next fire:{" "}
-          <strong>{formatLocalDateTime(nextFire(preset, derived)!)}</strong>.
+          {t("sched.nextFire", {
+            when: formatLocalDateTime(nextFire(preset, derived)!, lang),
+          })}
         </div>
       )}
       <div className="help" style={{ marginTop: 4 }}>
-        Expression: <code>{expr || "—"}</code>
+        {t("sched.expression", { expr: expr || "—" })}
       </div>
     </>
   );
@@ -541,10 +559,6 @@ function parseIntStrict(s: string, lo: number, hi: number): number | null {
   const n = parseInt(s, 10);
   if (n < lo || n > hi) return null;
   return n;
-}
-
-function capitalize(s: string): string {
-  return s.charAt(0).toUpperCase() + s.slice(1);
 }
 
 // Compute the next moment the schedule would fire, in the local zone, for the

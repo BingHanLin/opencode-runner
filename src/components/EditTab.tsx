@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import { api, pickDirectory } from "../api";
+import { useT } from "../LanguageProvider";
+import type { MessageKey } from "../i18n";
 import type { Model, Task } from "../types";
 import { parseScheduleKind } from "../types";
 import {
@@ -20,6 +22,7 @@ interface Props {
 }
 
 export function EditTab({ task, isNew, onSave, onDelete, onRunNow }: Props) {
+  const t = useT();
   const [draft, setDraft] = useState<Task>(task);
   const [models, setModels] = useState<Model[]>([]);
   const [confirmDelete, setConfirmDelete] = useState(false);
@@ -57,9 +60,9 @@ export function EditTab({ task, isNew, onSave, onDelete, onRunNow }: Props) {
     setMessage(null);
     try {
       await onSave(draft);
-      setMessage("Saved. Scheduler restarted.");
+      setMessage(t("edit.savedRestarted"));
     } catch (e) {
-      setMessage(`Save failed: ${e}`);
+      setMessage(t("settings.saveFailed", { error: String(e) }));
     } finally {
       setBusy(false);
     }
@@ -76,30 +79,30 @@ export function EditTab({ task, isNew, onSave, onDelete, onRunNow }: Props) {
             title="Ctrl+S"
           >
             <SaveIcon size={14} />
-            {busy ? "Saving…" : "Save"}
+            {busy ? t("btn.saving") : t("btn.save")}
           </button>
           {dirty && (
             <button className="btn" onClick={() => setDraft(task)}>
-              Revert
+              {t("btn.revert")}
             </button>
           )}
           <button className="btn" disabled={isNew || busy} onClick={onRunNow}>
             <PlayIcon size={13} />
-            Run now
+            {t("edit.runNow")}
           </button>
         </div>
         <div className="row" style={{ gap: 8 }}>
           {confirmDelete ? (
             <>
-              <span className="warn-text">Delete this task?</span>
+              <span className="warn-text">{t("edit.confirmDeleteQ")}</span>
               <button className="btn danger" onClick={onDelete}>
-                Confirm delete
+                {t("edit.confirmDelete")}
               </button>
               <button
                 className="btn"
                 onClick={() => setConfirmDelete(false)}
               >
-                Cancel
+                {t("btn.cancel")}
               </button>
             </>
           ) : (
@@ -109,19 +112,19 @@ export function EditTab({ task, isNew, onSave, onDelete, onRunNow }: Props) {
               onClick={() => setConfirmDelete(true)}
             >
               <TrashIcon size={13} />
-              Delete
+              {t("edit.delete")}
             </button>
           )}
         </div>
       </div>
 
-      {validation && <div className="error-text">{validation}</div>}
+      {validation && <div className="error-text">{t(validation)}</div>}
       {message && <div className="help">{message}</div>}
 
       <section className="section">
-        <div className="section-title">Basics</div>
+        <div className="section-title">{t("edit.section.basics")}</div>
         <div className="field">
-          <label className="field-label">Name</label>
+          <label className="field-label">{t("edit.name")}</label>
           <input
             className="input"
             value={draft.name}
@@ -129,7 +132,7 @@ export function EditTab({ task, isNew, onSave, onDelete, onRunNow }: Props) {
           />
         </div>
         <div className="field">
-          <label className="field-label">Tags</label>
+          <label className="field-label">{t("edit.tags")}</label>
           <TagsField
             tags={draft.tags ?? []}
             onChange={(next) => set("tags", next)}
@@ -138,7 +141,7 @@ export function EditTab({ task, isNew, onSave, onDelete, onRunNow }: Props) {
       </section>
 
       <section className="section">
-        <div className="section-title">Schedule</div>
+        <div className="section-title">{t("edit.section.schedule")}</div>
         <ScheduleEditor
           schedule={draft.schedule}
           onChange={(v) => set("schedule", v)}
@@ -150,15 +153,15 @@ export function EditTab({ task, isNew, onSave, onDelete, onRunNow }: Props) {
               checked={draft.enabled}
               onChange={(e) => set("enabled", e.target.checked)}
             />
-            Enabled
+            {t("edit.enabled")}
           </label>
         )}
       </section>
 
       <section className="section">
-        <div className="section-title">Execution</div>
+        <div className="section-title">{t("edit.section.execution")}</div>
         <div className="field">
-          <label className="field-label">Working directory</label>
+          <label className="field-label">{t("edit.workingDir")}</label>
           <div className="row">
             <input
               className="input grow"
@@ -168,19 +171,19 @@ export function EditTab({ task, isNew, onSave, onDelete, onRunNow }: Props) {
             />
             <button className="btn" onClick={browseWorkingDir}>
               <FolderIcon size={13} />
-              Browse…
+              {t("btn.browse")}
             </button>
           </div>
         </div>
 
         <div className="field">
-          <label className="field-label">Model</label>
+          <label className="field-label">{t("edit.model")}</label>
           <select
             className="select"
             value={draft.model ?? ""}
             onChange={(e) => set("model", e.target.value || null)}
           >
-            <option value="">(opencode default)</option>
+            <option value="">{t("edit.modelDefault")}</option>
             {models.map((m) => {
               const v = `${m.provider_id}/${m.model_id}`;
               return (
@@ -193,7 +196,7 @@ export function EditTab({ task, isNew, onSave, onDelete, onRunNow }: Props) {
         </div>
 
         <div className="field">
-          <label className="field-label">Timeout (minutes)</label>
+          <label className="field-label">{t("edit.timeout")}</label>
           <div className="row">
             <input
               type="number"
@@ -216,8 +219,8 @@ export function EditTab({ task, isNew, onSave, onDelete, onRunNow }: Props) {
             />
             <span className="help">
               {draft.timeout_secs && draft.timeout_secs > 0
-                ? `gracefully cancel runs that exceed ${draft.timeout_secs}s`
-                : "no timeout — run can take as long as opencode needs"}
+                ? t("edit.timeout.set", { secs: draft.timeout_secs })
+                : t("edit.timeout.none")}
             </span>
           </div>
         </div>
@@ -245,7 +248,7 @@ export function EditTab({ task, isNew, onSave, onDelete, onRunNow }: Props) {
               }}
             >
               <AlertIcon size={13} />
-              opencode will run without prompting you to allow tool calls.
+              {t("edit.skipPerms.warn")}
             </div>
           )}
         </div>
@@ -257,34 +260,26 @@ export function EditTab({ task, isNew, onSave, onDelete, onRunNow }: Props) {
               checked={draft.run_in_worktree}
               onChange={(e) => set("run_in_worktree", e.target.checked)}
             />
-            Run in throwaway git worktree
+            {t("edit.worktree.toggle")}
           </label>
         </div>
         {draft.run_in_worktree && (
           <>
             <div className="help" style={{ marginTop: 6 }}>
-              The fresh worktree starts clean — any gitignored files
-              (e.g. <code>.env</code>, <code>node_modules</code>, build output)
-              won't be there. To copy some in, drop a{" "}
-              <code>.worktreeinclude</code> file at the repo root listing one
-              path per line (<code>#</code> for comments). Paths tracked by git
-              are refused.
+              {t("edit.worktree.help")}
             </div>
             <div className="field" style={{ marginTop: 10 }}>
-              <label className="field-label">Worktree base ref (optional)</label>
+              <label className="field-label">{t("edit.worktree.baseLabel")}</label>
             <input
               className="input"
               value={draft.worktree_base ?? ""}
-              placeholder="leave empty to fork from current HEAD"
+              placeholder={t("edit.worktree.basePlaceholder")}
               onChange={(e) =>
                 set("worktree_base", e.target.value || null)
               }
             />
             <div className="help" style={{ marginTop: 4 }}>
-              When set (e.g. <code>origin/main</code>), the runner does{" "}
-              <code>git fetch --all</code> first, verifies the ref, then
-              creates the worktree from it; any failure aborts the run with
-              no HEAD fallback.
+              {t("edit.worktree.baseHelp")}
             </div>
           </div>
           </>
@@ -292,15 +287,18 @@ export function EditTab({ task, isNew, onSave, onDelete, onRunNow }: Props) {
       </section>
 
       <section className="section">
-        <div className="section-title">Prompt</div>
+        <div className="section-title">{t("edit.section.prompt")}</div>
         <textarea
           className="textarea"
           value={draft.prompt}
           onChange={(e) => set("prompt", e.target.value)}
-          placeholder="Describe the work for opencode to do…"
+          placeholder={t("edit.promptPlaceholder")}
         />
         <div className="help" style={{ marginTop: 6 }}>
-          {draft.prompt.length} chars · {draft.prompt.split("\n").length} lines
+          {t("edit.promptStats", {
+            chars: draft.prompt.length,
+            lines: draft.prompt.split("\n").length,
+          })}
         </div>
       </section>
     </div>
@@ -314,6 +312,7 @@ function TagsField({
   tags: string[];
   onChange: (next: string[]) => void;
 }) {
+  const t = useT();
   const [draft, setDraft] = useState("");
   function commit(raw: string) {
     const next = raw.trim().toLowerCase();
@@ -332,14 +331,14 @@ function TagsField({
   }
   return (
     <div className="tags-input">
-      {tags.map((t) => (
-        <span key={t} className="chip accent tag-chip">
-          {t}
+      {tags.map((tag) => (
+        <span key={tag} className="chip accent tag-chip">
+          {tag}
           <button
             type="button"
             className="tag-chip-x"
-            aria-label={`Remove tag ${t}`}
-            onClick={() => onChange(tags.filter((x) => x !== t))}
+            aria-label={t("edit.removeTag", { tag })}
+            onClick={() => onChange(tags.filter((x) => x !== tag))}
           >
             ×
           </button>
@@ -348,7 +347,7 @@ function TagsField({
       <input
         className="tag-input"
         value={draft}
-        placeholder={tags.length ? "" : "review, daily, frontend…"}
+        placeholder={tags.length ? "" : t("edit.tagsPlaceholder")}
         onChange={(e) => setDraft(e.target.value)}
         onKeyDown={onKeyDown}
         onBlur={() => {
@@ -362,13 +361,13 @@ function TagsField({
   );
 }
 
-function validate(t: Task): string | null {
-  if (!t.name.trim()) return "Name is required.";
-  if (!t.working_dir.trim()) return "Working directory is required.";
-  if (!t.prompt.trim()) return "Prompt is empty.";
-  if (t.schedule.startsWith("cron:") && !t.schedule.slice(5).trim())
-    return "Cron expression is empty.";
-  if (t.schedule.startsWith("once:") && !t.schedule.slice(5).trim())
-    return "Once timestamp is empty.";
+function validate(task: Task): MessageKey | null {
+  if (!task.name.trim()) return "edit.validate.name";
+  if (!task.working_dir.trim()) return "edit.validate.workingDir";
+  if (!task.prompt.trim()) return "edit.validate.prompt";
+  if (task.schedule.startsWith("cron:") && !task.schedule.slice(5).trim())
+    return "edit.validate.cron";
+  if (task.schedule.startsWith("once:") && !task.schedule.slice(5).trim())
+    return "edit.validate.once";
   return null;
 }

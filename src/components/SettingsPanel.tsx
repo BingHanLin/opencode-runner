@@ -1,5 +1,7 @@
 import { useEffect, useState } from "react";
 import { api, pickFile } from "../api";
+import { useLang, useT } from "../LanguageProvider";
+import { LANGS, type Lang } from "../i18n";
 import type { BinaryStatus, Settings, StoragePaths } from "../types";
 import { FolderIcon } from "./Icon";
 
@@ -9,6 +11,8 @@ interface Props {
 }
 
 export function SettingsPanel({ settings, onSave }: Props) {
+  const t = useT();
+  const { lang, setLang } = useLang();
   const [draft, setDraft] = useState<Settings>(settings);
   const [status, setStatus] = useState<BinaryStatus | null>(null);
   const [paths, setPaths] = useState<StoragePaths | null>(null);
@@ -40,9 +44,9 @@ export function SettingsPanel({ settings, onSave }: Props) {
       await onSave(draft);
       const next = await api.opencodeBinaryStatus();
       setStatus(next);
-      setMessage("Saved.");
+      setMessage(t("settings.saved"));
     } catch (e) {
-      setMessage(`Save failed: ${e}`);
+      setMessage(t("settings.saveFailed", { error: String(e) }));
     } finally {
       setBusy(false);
     }
@@ -51,20 +55,42 @@ export function SettingsPanel({ settings, onSave }: Props) {
   return (
     <div className="panel panel-pad-top">
       <h2 className="content-title" style={{ marginBottom: 12 }}>
-        Settings
+        {t("settings.title")}
       </h2>
 
       <section className="section">
-        <div className="section-title">opencode binary</div>
+        <div className="section-title">{t("settings.language.section")}</div>
+        <div className="field">
+          <label className="field-label">{t("settings.language.label")}</label>
+          <select
+            className="select"
+            style={{ maxWidth: 220 }}
+            value={lang}
+            onChange={(e) => setLang(e.target.value as Lang)}
+          >
+            {LANGS.map((l) => (
+              <option key={l.id} value={l.id}>
+                {l.label}
+              </option>
+            ))}
+          </select>
+          <div className="help" style={{ marginTop: 8 }}>
+            {t("settings.language.help")}
+          </div>
+        </div>
+      </section>
+
+      <section className="section">
+        <div className="section-title">{t("settings.binary.section")}</div>
         <div className="field">
           <label className="field-label">
-            Absolute path to the `opencode` binary
+            {t("settings.binary.label")}
           </label>
           <div className="row">
             <input
               className="input grow"
               value={draft.opencode_binary ?? ""}
-              placeholder="(leave empty to fall back to PATH lookup)"
+              placeholder={t("settings.binary.placeholder")}
               onChange={(e) =>
                 setDraft({
                   ...draft,
@@ -74,12 +100,11 @@ export function SettingsPanel({ settings, onSave }: Props) {
             />
             <button className="btn" onClick={browse}>
               <FolderIcon size={13} />
-              Browse…
+              {t("btn.browse")}
             </button>
           </div>
           <div className="help" style={{ marginTop: 8 }}>
-            Production setups should set this explicitly — PATH lookup is
-            vulnerable to PATH hijacking.
+            {t("settings.binary.help")}
           </div>
         </div>
 
@@ -87,7 +112,7 @@ export function SettingsPanel({ settings, onSave }: Props) {
           <div
             className={`chip ${status.honored_configured ? "success" : "warn"}`}
           >
-            resolved: {status.resolved_path}
+            {t("settings.binary.resolved", { path: status.resolved_path })}
           </div>
         )}
 
@@ -100,14 +125,14 @@ export function SettingsPanel({ settings, onSave }: Props) {
             disabled={!dirty || busy}
             onClick={() => setDraft(settings)}
           >
-            Revert
+            {t("btn.revert")}
           </button>
           <button
             className="btn primary"
             disabled={!dirty || busy}
             onClick={save}
           >
-            {busy ? "Saving…" : "Save"}
+            {busy ? t("btn.saving") : t("btn.save")}
           </button>
         </div>
         {message && (
@@ -118,32 +143,32 @@ export function SettingsPanel({ settings, onSave }: Props) {
       </section>
 
       <section className="section">
-        <div className="section-title">Storage</div>
+        <div className="section-title">{t("settings.storage.section")}</div>
         {paths ? (
           <div className="storage-paths">
             <StoragePathRow
-              label="Task config"
+              label={t("settings.storage.config.label")}
               path={paths.config_path}
-              note="tasks.toml — task definitions and settings."
+              note={t("settings.storage.config.note")}
             />
             <StoragePathRow
-              label="Run history db"
+              label={t("settings.storage.runsdb.label")}
               path={paths.runs_db}
-              note="runs.db — this app's SQLite store for runs, events, and logs."
+              note={t("settings.storage.runsdb.note")}
             />
             <StoragePathRow
-              label="opencode session db"
+              label={t("settings.storage.sessiondb.label")}
               path={paths.opencode_session_db}
-              note="opencode.db — owned by the opencode CLI; read-only here, used to render conversations."
+              note={t("settings.storage.sessiondb.note")}
             />
             <StoragePathRow
-              label="Worktree root"
+              label={t("settings.storage.worktree.label")}
               path={paths.worktree_root}
-              note="OS temp dir. Worktree-enabled runs create opencode-orchestrator-wt-<uuid>/ folders here and remove them when the run ends."
+              note={t("settings.storage.worktree.note")}
             />
           </div>
         ) : (
-          <div className="help">Loading paths…</div>
+          <div className="help">{t("settings.storage.loading")}</div>
         )}
       </section>
     </div>

@@ -2,43 +2,37 @@
 //
 // Two tiers:
 //   1. Compact preset labels ("Daily · 09:00") for the shapes ScheduleEditor's
-//      wizard builds — short enough to sit in a chip.
+//      wizard builds — short enough to sit in a chip. Pulled from the i18n
+//      dictionary so they localize with the rest of the UI.
 //   2. Anything else (lists like 9,18, ranges, steps, seconds) is handed to
-//      cronstrue for a full sentence.
+//      cronstrue, which has its own locale support.
 //
-// `locale` defaults to English so today's all-English UI stays consistent. When
-// the settings page gains a language switch, thread the chosen locale in at the
-// call sites (ScheduleChip / ScheduleEditor) — cronstrue's i18n build already
-// honours it here, so nothing in this file needs to change.
+// `lang` defaults to English. Call sites (ScheduleChip / ScheduleEditor) pass
+// the active language from the LanguageProvider; non-React callers can pass a
+// Lang directly since this module stays framework-agnostic.
 
 import cronstrue from "cronstrue/i18n";
-
-// cronstrue locale id, e.g. "en", "zh_TW", "zh_CN". Kept as a plain string so
-// the future settings value can flow straight through without a mapping here.
-export const DEFAULT_LOCALE = "en";
+import { cronLocale, t, type Lang, type MessageKey } from "./i18n";
 
 const QUARTZ_ORDER = ["SUN", "MON", "TUE", "WED", "THU", "FRI", "SAT"] as const;
-const WEEKDAY_SHORT: Record<string, string> = {
-  SUN: "Sun",
-  MON: "Mon",
-  TUE: "Tue",
-  WED: "Wed",
-  THU: "Thu",
-  FRI: "Fri",
-  SAT: "Sat",
+const WEEKDAY_KEY: Record<string, MessageKey> = {
+  SUN: "wd.sun",
+  MON: "wd.mon",
+  TUE: "wd.tue",
+  WED: "wd.wed",
+  THU: "wd.thu",
+  FRI: "wd.fri",
+  SAT: "wd.sat",
 };
 
-export function describeCron(
-  expr: string,
-  locale: string = DEFAULT_LOCALE,
-): string {
-  return compactCronLabel(expr) ?? verboseCron(expr, locale);
+export function describeCron(expr: string, lang: Lang = "en"): string {
+  return compactCronLabel(expr, lang) ?? verboseCron(expr, lang);
 }
 
 // Tier 1: the compact "Daily · 09:00" style labels for the wizard's preset
 // shapes. Returns null when the expression doesn't match a preset, so the
 // caller can fall through to cronstrue.
-function compactCronLabel(expr: string): string | null {
+function compactCronLabel(expr: string, lang: Lang): string | null {
   const parts = expr.trim().split(/\s+/);
   if (parts.length < 6) return null;
   const [sec, min, hour, dom, _month, dow] = parts;
@@ -48,7 +42,7 @@ function compactCronLabel(expr: string): string | null {
 
   // Hourly: hour=*, dom=?, dow=*
   if (hour === "*" && dom === "?" && dow === "*") {
-    return `Hourly · :${pad(m)}`;
+    return t(lang, "crondesc.hourly", { min: pad(m) });
   }
   const h = intIn(hour, 0, 23);
   if (h == null) return null;
@@ -56,17 +50,17 @@ function compactCronLabel(expr: string): string | null {
 
   // Daily: dom=?, dow=*
   if (dom === "?" && dow === "*") {
-    return `Daily · ${time}`;
+    return t(lang, "crondesc.daily", { time });
   }
   // Weekly: dom=?, dow=<list|range|*>
   if (dom === "?") {
     const days = parseWeekdays(dow);
-    if (days) return `Weekly · ${formatDays(days)} ${time}`;
+    if (days) return t(lang, "crondesc.weekly", { days: formatDays(days, lang), time });
   }
   // Monthly: dom=N, dow=?
   if (dow === "?") {
     const d = intIn(dom, 1, 31);
-    if (d != null) return `Monthly · day ${d} · ${time}`;
+    if (d != null) return t(lang, "crondesc.monthly", { day: d, time });
   }
   return null;
 }
@@ -74,10 +68,10 @@ function compactCronLabel(expr: string): string | null {
 // Tier 2: full-sentence description for arbitrary expressions (lists, ranges,
 // steps, seconds). Falls back to the raw expression if cronstrue can't parse
 // it, so the user always sees something.
-function verboseCron(expr: string, locale: string): string {
+function verboseCron(expr: string, lang: Lang): string {
   try {
     return cronstrue.toString(expr, {
-      locale,
+      locale: cronLocale(lang),
       use24HourTimeFormat: true,
     });
   } catch {
@@ -86,30 +80,29 @@ function verboseCron(expr: string, locale: string): string {
 }
 
 /** Same idea as describeCron but for the full `schedule` field. */
-export function describeSchedule(
-  schedule: string,
-  locale: string = DEFAULT_LOCALE,
-): string {
-  if (schedule.startsWith("cron:")) return describeCron(schedule.slice(5), locale);
+export function describeSchedule(schedule: string, lang: Lang = "en"): string {
+  if (schedule.startsWith("cron:")) return describeCron(schedule.slice(5), lang);
   if (schedule.startsWith("once:")) {
     const iso = schedule.slice(5);
     const d = new Date(iso);
     if (!Number.isNaN(d.getTime())) {
       try {
-        return `Once · ${new Intl.DateTimeFormat(undefined, {
-          month: "short",
-          day: "2-digit",
-          hour: "2-digit",
-          minute: "2-digit",
-          hour12: false,
-        }).format(d)}`;
+        return t(lang, "crondesc.once", {
+          when: new Intl.DateTimeFormat(undefined, {
+            month: "short",
+            day: "2-digit",
+            hour: "2-digit",
+            minute: "2-digit",
+            hour12: false,
+          }).format(d),
+        });
       } catch {
         /* fall through */
       }
     }
-    return `Once · ${iso}`;
+    return t(lang, "crondesc.once", { when: iso });
   }
-  return "Manual";
+  return t(lang, "crondesc.manual");
 }
 
 function parseWeekdays(s: string): string[] | null {
@@ -135,8 +128,8 @@ function parseWeekdays(s: string): string[] | null {
   return list;
 }
 
-function formatDays(days: string[]): string {
-  if (days.length === 7) return "every day";
+function formatDays(days: string[], lang: Lang): string {
+  if (days.length === 7) return t(lang, "crondesc.everyDay");
   // Detect contiguous range in Quartz order (SUN..SAT) so MON-FRI renders as
   // "Mon–Fri" instead of "Mon, Tue, Wed, Thu, Fri".
   const idx = days
@@ -149,10 +142,11 @@ function formatDays(days: string[]): string {
       break;
     }
   }
+  const name = (i: number) => t(lang, WEEKDAY_KEY[QUARTZ_ORDER[i]]);
   if (contiguous) {
-    return `${WEEKDAY_SHORT[QUARTZ_ORDER[idx[0]]]}–${WEEKDAY_SHORT[QUARTZ_ORDER[idx[idx.length - 1]]]}`;
+    return `${name(idx[0])}${t(lang, "crondesc.rangeSep")}${name(idx[idx.length - 1])}`;
   }
-  return idx.map((i) => WEEKDAY_SHORT[QUARTZ_ORDER[i]]).join(", ");
+  return idx.map(name).join(t(lang, "crondesc.listSep"));
 }
 
 function intIn(s: string, lo: number, hi: number): number | null {

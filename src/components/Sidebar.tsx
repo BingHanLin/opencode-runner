@@ -1,5 +1,6 @@
 import { useMemo, useState } from "react";
 import type { Task } from "../types";
+import { useT } from "../LanguageProvider";
 import { PlusIcon, SettingsIcon } from "./Icon";
 import { ScheduleChip } from "./StatusChip";
 
@@ -25,6 +26,7 @@ export function Sidebar({
   onSettings,
   onReorder,
 }: Props) {
+  const tr = useT();
   const [query, setQuery] = useState("");
   const [activeTag, setActiveTag] = useState<string | null>(null);
   const [dragId, setDragId] = useState<string | null>(null);
@@ -73,13 +75,17 @@ export function Sidebar({
     <aside className="sidebar">
       <div className="sidebar-header">
         <span className="sidebar-title">
-          Tasks · {filterActive ? `${filtered.length}/${tasks.length}` : tasks.length}
+          {tr("sidebar.tasks", {
+            count: filterActive
+              ? `${filtered.length}/${tasks.length}`
+              : tasks.length,
+          })}
         </span>
         <button
           className="btn ghost icon"
           onClick={onNew}
-          title="New task"
-          aria-label="New task"
+          title={tr("sidebar.newTask")}
+          aria-label={tr("sidebar.newTask")}
         >
           <PlusIcon size={16} />
         </button>
@@ -89,7 +95,7 @@ export function Sidebar({
         <input
           className="input sidebar-search"
           value={query}
-          placeholder="Search…"
+          placeholder={tr("sidebar.search")}
           onChange={(e) => setQuery(e.target.value)}
         />
         {allTags.length > 0 && (
@@ -113,14 +119,14 @@ export function Sidebar({
       <div className="sidebar-body">
         {tasks.length === 0 ? (
           <div className="empty-state" style={{ padding: 24 }}>
-            <div>No tasks yet.</div>
+            <div>{tr("sidebar.noTasks")}</div>
             <button className="btn primary" onClick={onNew}>
-              Create one
+              {tr("sidebar.createOne")}
             </button>
           </div>
         ) : filtered.length === 0 ? (
           <div className="empty-state" style={{ padding: 24 }}>
-            <div>No tasks match.</div>
+            <div>{tr("sidebar.noMatch")}</div>
           </div>
         ) : (
           filtered.map((t) => (
@@ -172,17 +178,17 @@ export function Sidebar({
               }}
             >
               <div className="task-name">
-                <span>{t.name || "(unnamed)"}</span>
+                <span>{t.name || tr("sidebar.unnamed")}</span>
                 {runningTaskIds.has(t.id) && (
                   <span className="chip info">
                     <span className="pulse" />
-                    running
+                    {tr("sidebar.running")}
                   </span>
                 )}
               </div>
               <div className="task-meta">
                 <ScheduleChip schedule={t.schedule} />
-                {!t.enabled && <span className="chip">disabled</span>}
+                {!t.enabled && <span className="chip">{tr("sidebar.disabled")}</span>}
                 {(t.tags ?? []).map((tag) => (
                   <span key={tag} className="chip tag-chip-mini">
                     {tag}
@@ -200,7 +206,7 @@ export function Sidebar({
           style={{ flex: 1, justifyContent: "flex-start" }}
         >
           <SettingsIcon size={15} />
-          Settings
+          {tr("sidebar.settings")}
         </button>
       </div>
     </aside>

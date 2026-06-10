@@ -6,6 +6,7 @@ import { SettingsPanel } from "./components/SettingsPanel";
 import { Sidebar } from "./components/Sidebar";
 import { ThemeToggle } from "./components/ThemeToggle";
 import { applyTheme, getInitialTheme, saveTheme, type Theme } from "./theme";
+import { useT } from "./LanguageProvider";
 import type {
   RunUpdate,
   Settings,
@@ -18,6 +19,7 @@ type View = "task" | "settings" | "empty";
 type TabId = "edit" | "history";
 
 export default function App() {
+  const t = useT();
   const [file, setFile] = useState<TasksFile | null>(null);
   const [activeId, setActiveId] = useState<string | null>(null);
   const [tab, setTab] = useState<TabId>("edit");
@@ -54,8 +56,8 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    refresh().catch((e) => setStatus(`Load failed: ${e}`));
-  }, [refresh]);
+    refresh().catch((e) => setStatus(t("app.flash.loadFailed", { error: String(e) })));
+  }, [refresh, t]);
 
   // Subscribe to run lifecycle events from the backend.
   useEffect(() => {
@@ -68,7 +70,7 @@ export default function App() {
           next.add(u.task_id);
           return next;
         });
-        flash(setStatus, `Run #${u.run_id} started`);
+        flash(setStatus, t("app.flash.runStarted", { id: u.run_id }));
       } else if (u.kind === "finished") {
         // We don't have task_id on finish; refresh the run list to update
         // the pill state lazily. For accuracy we re-derive by listing runs.
@@ -79,13 +81,13 @@ export default function App() {
             ),
           );
         });
-        flash(setStatus, `Run #${u.run_id} ${u.status}`);
+        flash(setStatus, t("app.flash.runFinished", { id: u.run_id, status: u.status }));
       }
     }).then((un) => (unlisten = un));
     return () => {
       if (unlisten) unlisten();
     };
-  }, []);
+  }, [t]);
 
   // Prime the running-pill state on boot so existing in-flight runs appear.
   useEffect(() => {
@@ -138,7 +140,7 @@ export default function App() {
     setNewDraft(null);
     setFile(nextFile);
     setActiveId(updated.id);
-    flash(setStatus, "Saved & scheduler restarted");
+    flash(setStatus, t("app.flash.savedRestarted"));
   }
 
   async function deleteTask() {
@@ -158,7 +160,7 @@ export default function App() {
     setFile(nextFile);
     setActiveId(nextFile.tasks[0]?.id ?? null);
     setView(nextFile.tasks[0] ? "task" : "empty");
-    flash(setStatus, "Deleted");
+    flash(setStatus, t("app.flash.deleted"));
   }
 
   async function runActive() {
@@ -181,7 +183,7 @@ export default function App() {
     const next: TasksFile = { settings: file.settings, tasks: reordered };
     setFile(next);
     await api.saveTasksFile(next);
-    flash(setStatus, "Reordered");
+    flash(setStatus, t("app.flash.reordered"));
   }
 
   async function saveSettings(settings: Settings) {
@@ -195,7 +197,7 @@ export default function App() {
   if (!file) {
     return (
       <div className="empty-state" style={{ height: "100vh" }}>
-        Loading…
+        {t("app.loading")}
       </div>
     );
   }
@@ -217,23 +219,23 @@ export default function App() {
         {view === "task" && active ? (
           <>
             <div className="content-header">
-              <span className="content-title">{active.name || "Untitled"}</span>
-              <span className="help">id: {active.id}</span>
+              <span className="content-title">{active.name || t("app.untitled")}</span>
+              <span className="help">{t("app.idLabel", { id: active.id })}</span>
             </div>
             <div className="tabs">
               <button
                 className={`tab ${tab === "edit" ? "active" : ""}`}
                 onClick={() => setTab("edit")}
               >
-                Edit
+                {t("app.tab.edit")}
               </button>
               <button
                 className={`tab ${tab === "history" ? "active" : ""}`}
                 onClick={() => setTab("history")}
                 disabled={isNew}
-                title={isNew ? "Save the task first to see history" : ""}
+                title={isNew ? t("app.tab.historyDisabled") : ""}
               >
-                History
+                {t("app.tab.history")}
               </button>
             </div>
             {tab === "edit" ? (
@@ -252,19 +254,24 @@ export default function App() {
           <SettingsPanel settings={file.settings} onSave={saveSettings} />
         ) : (
           <div className="empty-state">
-            <h2>No task selected</h2>
-            <p>Pick a task on the left or create a new one.</p>
+            <h2>{t("app.empty.title")}</h2>
+            <p>{t("app.empty.body")}</p>
           </div>
         )}
       </main>
 
       <div className="status-bar">
         <span>
-          {file.tasks.length} task{file.tasks.length === 1 ? "" : "s"} ·{" "}
-          {file.tasks.filter((t) => t.enabled).length} enabled
+          {t(
+            file.tasks.length === 1 ? "app.status.tasksOne" : "app.status.tasksMany",
+            {
+              count: file.tasks.length,
+              enabled: file.tasks.filter((task) => task.enabled).length,
+            },
+          )}
         </span>
         <div className="status-bar-right">
-          <span>{status ?? "ready"}</span>
+          <span>{status ?? t("app.status.ready")}</span>
           <ThemeToggle
             theme={theme}
             onToggle={() => setTheme(theme === "dark" ? "light" : "dark")}
