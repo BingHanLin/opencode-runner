@@ -1,4 +1,5 @@
 import { describeSchedule } from "../cronDescribe";
+import { useLang } from "../LanguageProvider";
 
 interface Props {
   status: string;
@@ -26,10 +27,11 @@ function chipTone(status: string): string {
 }
 
 export function ScheduleChip({ schedule }: { schedule: string }) {
+  const { lang } = useLang();
   let tone = "";
   if (schedule.startsWith("cron:")) tone = "accent";
   else if (schedule.startsWith("once:")) tone = "info";
-  const label = describeSchedule(schedule);
+  const label = describeSchedule(schedule, lang);
   return (
     <span className={`chip ${tone}`} title={schedule}>
       {label}
