@@ -17,6 +17,10 @@ tauri = { version = "2", features = ["tray-icon", "image-png"] }
 tauri-plugin-dialog = "2"
 tauri-plugin-single-instance = "2"
 
+# In-app auto-update: check a signed latest.json, download + install, relaunch.
+tauri-plugin-updater = "2"
+tauri-plugin-process = "2"
+
 # Async + JSON IPC plumbing
 tokio = { version = "1", features = ["rt-multi-thread", "macros", "process", "time", "sync", "io-util", "fs"] }
 serde = { version = "1", features = ["derive"] }

@@ -4,6 +4,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
+import { relaunch } from "@tauri-apps/plugin-process";
+import { check, type Update } from "@tauri-apps/plugin-updater";
 
 import type {
   BinaryStatus,
@@ -58,4 +60,19 @@ export function onRunUpdate(
   handler: (u: RunUpdate) => void,
 ): Promise<UnlistenFn> {
   return listen<RunUpdate>("run-update", (e) => handler(e.payload));
+}
+
+// ---- App auto-update (tauri-plugin-updater) ----
+
+export type { Update } from "@tauri-apps/plugin-updater";
+
+/** Ask the updater endpoint whether a newer signed release exists. Resolves
+ *  to the Update handle when one is available, or null when up to date. */
+export function checkForUpdate(): Promise<Update | null> {
+  return check();
+}
+
+/** Restart the app — called after an update has been installed in place. */
+export function relaunchApp(): Promise<void> {
+  return relaunch();
 }

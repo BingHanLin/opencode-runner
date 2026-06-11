@@ -69,6 +69,15 @@ const en = {
   "app.flash.deleted": "Deleted",
   "app.flash.reordered": "Reordered",
 
+  // ---- Update banner ----
+  "update.available": "Version {version} is available.",
+  "update.install": "Update now",
+  "update.downloading": "Downloading update… {percent}%",
+  "update.ready": "Update installed — restarting…",
+  "update.error": "Update failed: {error}",
+  "update.retry": "Retry",
+  "update.dismiss": "Dismiss",
+
   // ---- Sidebar ----
   "sidebar.tasks": "Tasks · {count}",
   "sidebar.newTask": "New task",
@@ -276,6 +285,15 @@ const zhTW: Record<MessageKey, string> = {
   "app.flash.savedRestarted": "已儲存，排程器已重啟",
   "app.flash.deleted": "已刪除",
   "app.flash.reordered": "已重新排序",
+
+  // ---- Update banner ----
+  "update.available": "有新版本 {version} 可用。",
+  "update.install": "立即更新",
+  "update.downloading": "下載更新中… {percent}%",
+  "update.ready": "更新完成，正在重新啟動…",
+  "update.error": "更新失敗：{error}",
+  "update.retry": "重試",
+  "update.dismiss": "關閉",
 
   // ---- Sidebar ----
   "sidebar.tasks": "任務 · {count}",
