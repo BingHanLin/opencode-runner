@@ -85,6 +85,16 @@ pub fn run() {
             let config_path = data_dir.join("tasks.toml");
             let db_path = data_dir.join("runs.db");
             let db = Db::open(&db_path).expect("opening run history db");
+            // A just-launched process owns no in-flight runs, so any row still
+            // marked `running` is a leftover from a prior process that was
+            // force-killed or crashed without going through the tray-Quit
+            // graceful shutdown. Reconcile them to `aborted` now so the UI
+            // doesn't show ghost runs stuck "running" forever.
+            match db.reconcile_orphaned_runs() {
+                Ok(0) => {}
+                Ok(n) => tracing::info!("reconciled {n} orphaned run(s) left 'running' by a prior process"),
+                Err(e) => tracing::warn!("reconciling orphaned runs failed: {e:#}"),
+            }
             let registry = new_cancel_registry();
 
             // Boot scheduler with tasks already on disk.
