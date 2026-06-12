@@ -104,6 +104,47 @@ impl Db {
         })
     }
 
+    /// Mark every run still flagged `running` (plus any open step events) as
+    /// `aborted`. Called once at startup: a freshly-launched process can't have
+    /// any genuinely in-flight runs, so anything left `running` is a leftover
+    /// from a previous process that died without finishing — a force-kill
+    /// (Task Manager), crash, or OS shutdown/sleep that bypassed the tray-Quit
+    /// graceful path. Without this, such rows show as perpetually "running" in
+    /// the UI forever. `finished_at` is set to the run's last log timestamp so
+    /// the recorded duration reflects when work actually stopped, not boot
+    /// time. Returns the number of runs reconciled.
+    pub fn reconcile_orphaned_runs(&self) -> Result<u64> {
+        const MSG: &str = "interrupted: app exited while run was in progress";
+        let conn = self.inner.lock().unwrap();
+        let now = Utc::now().to_rfc3339();
+        // Close dangling step events first, falling back to boot time when a
+        // run produced no logs to borrow a timestamp from.
+        conn.execute(
+            "UPDATE run_events
+                SET status = 'aborted',
+                    finished_at = COALESCE(
+                        finished_at,
+                        (SELECT MAX(ts) FROM run_logs WHERE run_logs.run_id = run_events.run_id),
+                        ?1
+                    ),
+                    message = COALESCE(message, ?2)
+              WHERE status = 'running'",
+            params![now, MSG],
+        )?;
+        let n = conn.execute(
+            "UPDATE runs
+                SET status = 'aborted',
+                    finished_at = COALESCE(
+                        (SELECT MAX(ts) FROM run_logs WHERE run_logs.run_id = runs.id),
+                        started_at
+                    ),
+                    error = ?1
+              WHERE status = 'running'",
+            params![MSG],
+        )?;
+        Ok(n as u64)
+    }
+
     pub fn insert_run_start(&self, task_id: &str) -> Result<i64> {
         let conn = self.inner.lock().unwrap();
         let now = Utc::now().to_rfc3339();

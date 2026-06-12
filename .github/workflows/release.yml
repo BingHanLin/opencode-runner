@@ -92,6 +92,12 @@ jobs:
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Sign the updater artifacts so the app's updater can verify them
+          # against the pubkey baked into tauri.conf.json. With
+          # bundle.createUpdaterArtifacts = true, tauri-action also generates
+          # latest.json and attaches it to the release.
+          TAURI_SIGNING_PRIVATE_KEY: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY }}
+          TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         with:
           # Only create a release on tag pushes. Manual runs just build.
           tagName: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}

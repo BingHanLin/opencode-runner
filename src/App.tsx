@@ -5,6 +5,7 @@ import { HistoryTab } from "./components/HistoryTab";
 import { SettingsPanel } from "./components/SettingsPanel";
 import { Sidebar } from "./components/Sidebar";
 import { ThemeToggle } from "./components/ThemeToggle";
+import { UpdateBanner } from "./components/UpdateBanner";
 import { applyTheme, getInitialTheme, saveTheme, type Theme } from "./theme";
 import { useT } from "./LanguageProvider";
 import type {
@@ -216,6 +217,7 @@ export default function App() {
       />
 
       <main className="content">
+        <UpdateBanner />
         {view === "task" && active ? (
           <>
             <div className="content-header">
