@@ -2,7 +2,7 @@ import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
 import { api, pickDirectory } from "../api";
 import { useT } from "../LanguageProvider";
 import type { MessageKey } from "../i18n";
-import type { Model, Task } from "../types";
+import type { Model, Task, TaskMemory } from "../types";
 import { parseScheduleKind } from "../types";
 import {
   AlertIcon,
@@ -313,6 +313,101 @@ export function EditTab({
           })}
         </div>
       </section>
+
+      <section className="section">
+        <div className="section-title">{t("edit.section.memory")}</div>
+        <label className="checkbox">
+          <input
+            type="checkbox"
+            checked={draft.memory_enabled}
+            onChange={(e) => set("memory_enabled", e.target.checked)}
+          />
+          {t("edit.memory.enable")}
+        </label>
+        <div className="help" style={{ marginTop: 6, marginLeft: 22 }}>
+          {t("edit.memory.enableHelp")}
+        </div>
+        {draft.memory_enabled && !isNew && <MemorySection taskId={task.id} />}
+      </section>
+    </div>
+  );
+}
+
+// Saved memory viewer/editor. Memory is DB-backed (not part of the task draft),
+// so this self-loads by task id and persists through its own IPC calls.
+function MemorySection({ taskId }: { taskId: string }) {
+  const t = useT();
+  const [content, setContent] = useState("");
+  const [loaded, setLoaded] = useState<TaskMemory | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    setMessage(null);
+    api
+      .getTaskMemory(taskId)
+      .then((m) => {
+        setLoaded(m);
+        setContent(m?.content ?? "");
+      })
+      .catch((e) => setMessage(t("edit.memory.loadFailed", { error: String(e) })));
+  }, [taskId, t]);
+
+  const dirty = content !== (loaded?.content ?? "");
+
+  async function persist(next: string) {
+    setBusy(true);
+    setMessage(null);
+    try {
+      await api.setTaskMemory(taskId, next);
+      const m = await api.getTaskMemory(taskId);
+      setLoaded(m);
+      setContent(m?.content ?? "");
+      setMessage(t("edit.memory.saved"));
+    } catch (e) {
+      setMessage(t("edit.memory.saveFailed", { error: String(e) }));
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <div className="field" style={{ marginTop: 14 }}>
+      <label className="field-label">{t("edit.memory.label")}</label>
+      <textarea
+        className="textarea"
+        value={content}
+        onChange={(e) => setContent(e.target.value)}
+        placeholder={t("edit.memory.placeholder")}
+      />
+      <div className="row" style={{ gap: 8, marginTop: 8 }}>
+        <button
+          className="btn primary"
+          disabled={!dirty || busy}
+          onClick={() => persist(content)}
+        >
+          {t("edit.memory.save")}
+        </button>
+        <button
+          className="btn"
+          disabled={busy || (!content && !loaded)}
+          onClick={() => persist("")}
+        >
+          {t("edit.memory.clear")}
+        </button>
+        {loaded && (
+          <span className="help">
+            {t("edit.memory.updated", {
+              time: new Date(loaded.updated_at).toLocaleString(),
+            })}
+          </span>
+        )}
+      </div>
+      {message && (
+        <div className="help" style={{ marginTop: 6 }}>
+          {message}
+        </div>
+      )}
     </div>
   );
 }

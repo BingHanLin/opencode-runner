@@ -12,10 +12,12 @@ import type {
   MessagePair,
   Model,
   Run,
+  RunComment,
   RunEvent,
   RunLog,
   RunUpdate,
   StoragePaths,
+  TaskMemory,
   TasksFile,
 } from "./types";
 
@@ -37,6 +39,16 @@ export const api = {
   abortRun: (runId: number) => invoke<void>("abort_run", { runId }),
   clearRunsForTask: (taskId: string) =>
     invoke<number>("clear_runs_for_task", { taskId }),
+  getTaskMemory: (taskId: string) =>
+    invoke<TaskMemory | null>("get_task_memory", { taskId }),
+  setTaskMemory: (taskId: string, content: string) =>
+    invoke<void>("set_task_memory", { taskId, content }),
+  listCommentsForRun: (runId: number) =>
+    invoke<RunComment[]>("list_comments_for_run", { runId }),
+  addComment: (taskId: string, runId: number, text: string) =>
+    invoke<RunComment>("add_comment", { taskId, runId, text }),
+  deleteComment: (commentId: number) =>
+    invoke<void>("delete_comment", { commentId }),
   restartScheduler: () => invoke<void>("restart_scheduler"),
   isGitRepoPath: (path: string) =>
     invoke<boolean>("is_git_repo_path", { path }),

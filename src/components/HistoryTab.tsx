@@ -11,6 +11,7 @@ import type {
   ConversationPart,
   MessagePair,
   Run,
+  RunComment,
   RunEvent,
   RunLog,
   RunUpdate,
@@ -290,6 +291,7 @@ export function HistoryTab({ task, events }: Props) {
         <div className="history-right">
           {activeRun ? (
             <RunDetails
+              task={task}
               run={activeRun}
               seq={
                 runs.length -
@@ -317,6 +319,7 @@ export function HistoryTab({ task, events }: Props) {
 }
 
 function RunDetails({
+  task,
   run,
   seq,
   events,
@@ -328,6 +331,7 @@ function RunDetails({
   onToggleEvent,
   onAbort,
 }: {
+  task: Task;
   run: Run;
   seq: number;
   events: RunEvent[];
@@ -341,6 +345,28 @@ function RunDetails({
 }) {
   const t = useT();
   const stall = stallInfo(run, now);
+
+  // Inner tabs split the run log (steps/output/conversation) from per-run
+  // comments so feedback has its own space. Reset to the log tab and reload
+  // comments whenever the selected run changes.
+  const [detailTab, setDetailTab] = useState<"log" | "comments">("log");
+  const [comments, setComments] = useState<RunComment[]>([]);
+  useEffect(() => {
+    setDetailTab("log");
+    api
+      .listCommentsForRun(run.id)
+      .then(setComments)
+      .catch(() => setComments([]));
+  }, [run.id]);
+
+  async function addComment(text: string) {
+    const c = await api.addComment(task.id, run.id, text);
+    setComments((prev) => [...prev, c]);
+  }
+  async function removeComment(id: number) {
+    await api.deleteComment(id);
+    setComments((prev) => prev.filter((c) => c.id !== id));
+  }
 
   return (
     <div className="run-details">
@@ -367,6 +393,30 @@ function RunDetails({
         {run.session_id && t("hist.session", { id: run.session_id })}
       </div>
 
+      <div className="tabs detail-tabs">
+        <button
+          className={`tab ${detailTab === "log" ? "active" : ""}`}
+          onClick={() => setDetailTab("log")}
+        >
+          {t("hist.tab.log")}
+        </button>
+        <button
+          className={`tab ${detailTab === "comments" ? "active" : ""}`}
+          onClick={() => setDetailTab("comments")}
+        >
+          {t("hist.tab.comments")}
+          {comments.length > 0 ? ` (${comments.length})` : ""}
+        </button>
+      </div>
+
+      {detailTab === "comments" ? (
+        <CommentsSection
+          comments={comments}
+          onAdd={addComment}
+          onRemove={removeComment}
+        />
+      ) : (
+        <>
       {run.error && (
         <div
           className="section"
@@ -396,6 +446,8 @@ function RunDetails({
           </div>
         </div>
       )}
+
+      <PromptSection prompt={run.prompt} />
 
       <section className="section">
         <div className="section-title">{t("hist.steps")}</div>
@@ -470,7 +522,122 @@ function RunDetails({
           ))
         )}
       </section>
+        </>
+      )}
     </div>
+  );
+}
+
+// ============================================================================
+//                          Sent prompt (verbatim)
+// ============================================================================
+
+// Shows the exact prompt sent to opencode for this run — including any memory
+// and comment context the runner injected. Collapsible; hidden for old runs
+// that predate prompt capture (prompt == null).
+function PromptSection({ prompt }: { prompt: string | null }) {
+  const t = useT();
+  const [expanded, setExpanded] = useState(false);
+  if (!prompt) return null;
+  return (
+    <section className="section">
+      <button
+        type="button"
+        className="logs-head"
+        onClick={() => setExpanded((e) => !e)}
+        aria-expanded={expanded}
+      >
+        <span className="event-arrow">{expanded ? "▾" : "▸"}</span>
+        <span className="section-title" style={{ margin: 0 }}>
+          {t("hist.prompt")}
+        </span>
+        <span className="help logs-summary">
+          {t("hist.prompt.summary", { chars: prompt.length })}
+        </span>
+      </button>
+      {expanded && <pre className="logs-box mono">{prompt}</pre>}
+    </section>
+  );
+}
+
+// ============================================================================
+//                          Comments (per-run feedback)
+// ============================================================================
+
+function CommentsSection({
+  comments,
+  onAdd,
+  onRemove,
+}: {
+  comments: RunComment[];
+  onAdd: (text: string) => Promise<void>;
+  onRemove: (id: number) => Promise<void>;
+}) {
+  const t = useT();
+  const [draft, setDraft] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function add() {
+    const text = draft.trim();
+    if (!text) return;
+    setBusy(true);
+    try {
+      await onAdd(text);
+      setDraft("");
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  return (
+    <section className="section">
+      <div className="help" style={{ marginBottom: 8 }}>
+        {t("hist.comments.hint")}
+      </div>
+      {comments.length === 0 ? (
+        <div className="help">{t("hist.comments.empty")}</div>
+      ) : (
+        comments.map((c) => (
+          <div key={c.id} className="comment-row">
+            <div className="conv-text" style={{ whiteSpace: "pre-wrap" }}>
+              {c.text}
+            </div>
+            <div
+              className="row"
+              style={{ gap: 8, alignItems: "center", marginTop: 4 }}
+            >
+              <span className="help">
+                {new Date(c.created_at).toLocaleString()}
+              </span>
+              <button
+                className="btn ghost icon"
+                onClick={() => onRemove(c.id)}
+                aria-label={t("hist.comments.delete")}
+                title={t("hist.comments.delete")}
+              >
+                <TrashIcon size={14} />
+              </button>
+            </div>
+          </div>
+        ))
+      )}
+      <textarea
+        className="textarea"
+        style={{ minHeight: 60, marginTop: 10 }}
+        value={draft}
+        onChange={(e) => setDraft(e.target.value)}
+        placeholder={t("hist.comments.placeholder")}
+      />
+      <div className="row" style={{ marginTop: 8 }}>
+        <button
+          className="btn primary"
+          disabled={busy || !draft.trim()}
+          onClick={add}
+        >
+          {busy ? t("hist.comments.adding") : t("hist.comments.add")}
+        </button>
+      </div>
+    </section>
   );
 }
 

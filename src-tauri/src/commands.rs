@@ -3,7 +3,7 @@
 //! frontend doesn't need to special-case anyhow's structured chain.
 
 use crate::config::{self, Settings, Task, TasksFile};
-use crate::db::{Run, RunEvent, RunLog};
+use crate::db::{Run, RunComment, RunEvent, RunLog, TaskMemory};
 use crate::opencode::storage::{self, Message, Part};
 use crate::opencode::{Cli, Model};
 use crate::runner::{self, is_git_repo, RunNotifier};
@@ -86,6 +86,52 @@ pub fn list_logs(
     limit: Option<i64>,
 ) -> Result<Vec<RunLog>, String> {
     state.db.list_logs_for_run(run_id, limit.unwrap_or(500)).map_err(s)
+}
+
+// ---------- task memory & comments ----------
+
+#[tauri::command]
+pub fn get_task_memory(
+    state: State<'_, AppState>,
+    task_id: String,
+) -> Result<Option<TaskMemory>, String> {
+    state.db.get_task_memory(&task_id).map_err(s)
+}
+
+#[tauri::command]
+pub fn set_task_memory(
+    state: State<'_, AppState>,
+    task_id: String,
+    content: String,
+) -> Result<(), String> {
+    state.db.set_task_memory(&task_id, &content).map_err(s)
+}
+
+#[tauri::command]
+pub fn list_comments_for_run(
+    state: State<'_, AppState>,
+    run_id: i64,
+) -> Result<Vec<RunComment>, String> {
+    state.db.list_comments_for_run(run_id).map_err(s)
+}
+
+#[tauri::command]
+pub fn add_comment(
+    state: State<'_, AppState>,
+    task_id: String,
+    run_id: i64,
+    text: String,
+) -> Result<RunComment, String> {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return Err("comment is empty".to_string());
+    }
+    state.db.add_comment(&task_id, run_id, trimmed).map_err(s)
+}
+
+#[tauri::command]
+pub fn delete_comment(state: State<'_, AppState>, comment_id: i64) -> Result<(), String> {
+    state.db.delete_comment(comment_id).map_err(s)
 }
 
 #[derive(Serialize)]

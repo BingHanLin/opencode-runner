@@ -1,5 +1,5 @@
 use crate::config::Task;
-use crate::db::Db;
+use crate::db::{Db, RunComment};
 use crate::opencode::{Cli, LogSink};
 use anyhow::{anyhow, Result};
 use serde::Serialize;
@@ -198,6 +198,29 @@ pub async fn execute(
         .map(|w| w.path.as_path())
         .unwrap_or(task.working_dir.as_path());
 
+    // When the task opts into memory, fold its saved memory plus recent user
+    // comments into the prompt (and tell the agent how to update its memory).
+    // Otherwise the prompt is sent verbatim so non-opted tasks stay clean.
+    let effective_prompt: String = if task.memory_enabled {
+        let memory = db.get_task_memory(&task.id).ok().flatten();
+        let comments = db
+            .recent_comments_for_task(&task.id, 10)
+            .unwrap_or_default();
+        build_augmented_prompt(
+            &task.prompt,
+            memory.as_ref().map(|m| m.content.as_str()),
+            &comments,
+        )
+    } else {
+        task.prompt.clone()
+    };
+
+    // Persist exactly what we're about to send so the History tab can show it
+    // verbatim — independent of whether opencode allocates a session.
+    if let Err(e) = db.set_run_prompt(run_id, &effective_prompt) {
+        tracing::warn!(task = %task.id, "recording run prompt failed: {e:#}");
+    }
+
     let opencode_evt = ctx.start_event(run_id, "Run opencode");
 
     // Callback: as soon as opencode emits its `ses_…` token, surface it to
@@ -252,7 +275,7 @@ pub async fn execute(
     let outcome = cli
         .run_task(
             effective_dir,
-            &task.prompt,
+            &effective_prompt,
             task.model.as_deref(),
             task.dangerously_skip_permissions,
             cancel.clone(),
@@ -311,6 +334,33 @@ pub async fn execute(
     };
 
     db.finish_run(run_id, final_status, final_error.as_deref())?;
+
+    // If memory is on and the run produced a session, parse the agent's final
+    // reply for a `<memory>…</memory>` block and persist it (replacing prior
+    // memory). No block → memory left untouched. Best-effort: failures here
+    // never change the run's recorded outcome.
+    if task.memory_enabled {
+        let session_id = match &outcome {
+            Ok(o) => o.session_id.clone(),
+            Err(_) => None,
+        };
+        if let Some(sid) = session_id {
+            match extract_memory_from_session(&sid) {
+                Some(content) => match db.set_task_memory(&task.id, &content) {
+                    Ok(()) => tracing::info!(
+                        task = %task.id,
+                        "updated task memory ({} chars) from run {run_id}",
+                        content.len()
+                    ),
+                    Err(e) => tracing::warn!(task = %task.id, "saving task memory failed: {e:#}"),
+                },
+                None => tracing::debug!(
+                    task = %task.id,
+                    "no <memory> block in run {run_id} final reply; memory unchanged"
+                ),
+            }
+        }
+    }
 
     // Tear the worktree down regardless of success/failure. Cleanup errors
     // are logged but don't override the run's outcome — a dangling worktree
@@ -598,4 +648,194 @@ fn copy_recursive_sync(src: &Path, dst: &Path) -> std::io::Result<()> {
         std::fs::copy(src, dst)?;
     }
     Ok(())
+}
+
+// ============================================================================
+//                          Memory / comment injection
+// ============================================================================
+
+/// Marker tags the agent uses to write memory. Kept here so the prompt builder
+/// and the parser can't drift apart.
+const MEMORY_OPEN: &str = "<memory>";
+const MEMORY_CLOSE: &str = "</memory>";
+
+/// Compose the prompt actually sent to opencode for a memory-enabled task:
+/// the user's prompt, then an orchestrator-managed context block carrying the
+/// saved memory, recent user comments, and instructions for updating memory.
+/// Pure (no I/O) so it can be unit-tested.
+fn build_augmented_prompt(prompt: &str, memory: Option<&str>, comments: &[RunComment]) -> String {
+    let mut out = String::with_capacity(prompt.len() + 512);
+    out.push_str(prompt.trim_end());
+    out.push_str(
+        "\n\n================ ORCHESTRATOR CONTEXT ================\n\
+         These sections are managed by the orchestrator across runs of this task.\n",
+    );
+
+    out.push_str("\n## Your memory (saved from previous runs)\n");
+    match memory.map(str::trim).filter(|m| !m.is_empty()) {
+        Some(m) => {
+            out.push_str(m);
+            out.push('\n');
+        }
+        None => out.push_str("(empty — nothing saved yet)\n"),
+    }
+
+    if !comments.is_empty() {
+        out.push_str("\n## User feedback on previous runs (most recent first)\n");
+        for c in comments {
+            // Comments arrive newest-first; render one bullet each, tagged with
+            // the run they were left on and when, so the agent can weigh them.
+            let when = c.created_at.format("%Y-%m-%d %H:%M UTC");
+            out.push_str(&format!(
+                "- [run #{}, {}] {}\n",
+                c.run_id,
+                when,
+                c.text.trim()
+            ));
+        }
+    }
+
+    out.push_str(&format!(
+        "\n## Saving memory\n\
+         If anything is worth remembering for your future runs of this task, end your reply\n\
+         with a block exactly like:\n\
+         {MEMORY_OPEN}\n\
+         …what to remember…\n\
+         {MEMORY_CLOSE}\n\
+         This block REPLACES your entire current memory shown above, so include anything from\n\
+         it you still want to keep. Omit the block to leave your memory unchanged.\n\
+         =====================================================\n"
+    ));
+    out
+}
+
+/// Pull the agent's final assistant reply out of the opencode session and
+/// extract its `<memory>` block, if any. Best-effort: any storage error or
+/// missing session yields `None`.
+fn extract_memory_from_session(session_id: &str) -> Option<String> {
+    let convo = crate::opencode::storage::load_conversation(session_id).ok()?;
+    let mut text = String::new();
+    for (msg, parts) in convo.iter().rev() {
+        if msg.role.as_deref() == Some("assistant") {
+            for p in parts {
+                if p.kind.as_deref() == Some("text") {
+                    if let Some(t) = &p.text {
+                        text.push_str(t);
+                        text.push('\n');
+                    }
+                }
+            }
+            break;
+        }
+    }
+    extract_memory_block(&text)
+}
+
+/// Extract the inner content of the last `<memory>…</memory>` block in `text`,
+/// trimmed. Case-insensitive on the tags, spans newlines, and returns `None`
+/// when there's no block or the block is empty. Pure, for unit testing.
+fn extract_memory_block(text: &str) -> Option<String> {
+    let open_pos = rfind_ci(text, MEMORY_OPEN)?;
+    let after = open_pos + MEMORY_OPEN.len();
+    let close_rel = find_ci(&text[after..], MEMORY_CLOSE)?;
+    let inner = text[after..after + close_rel].trim();
+    if inner.is_empty() {
+        None
+    } else {
+        Some(inner.to_string())
+    }
+}
+
+/// First byte index of `needle` in `haystack`, ASCII-case-insensitively.
+/// `needle` is ASCII (our tags), so matches land on char boundaries.
+fn find_ci(haystack: &str, needle: &str) -> Option<usize> {
+    let (hb, nb) = (haystack.as_bytes(), needle.as_bytes());
+    if nb.is_empty() || hb.len() < nb.len() {
+        return None;
+    }
+    (0..=hb.len() - nb.len()).find(|&i| hb[i..i + nb.len()].eq_ignore_ascii_case(nb))
+}
+
+/// Last byte index of `needle` in `haystack`, ASCII-case-insensitively.
+fn rfind_ci(haystack: &str, needle: &str) -> Option<usize> {
+    let (hb, nb) = (haystack.as_bytes(), needle.as_bytes());
+    if nb.is_empty() || hb.len() < nb.len() {
+        return None;
+    }
+    (0..=hb.len() - nb.len())
+        .rev()
+        .find(|&i| hb[i..i + nb.len()].eq_ignore_ascii_case(nb))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use chrono::Utc;
+
+    fn comment(run_id: i64, text: &str) -> RunComment {
+        RunComment {
+            id: run_id,
+            task_id: "t".into(),
+            run_id,
+            text: text.into(),
+            created_at: Utc::now(),
+        }
+    }
+
+    #[test]
+    fn extracts_simple_block() {
+        let r = extract_memory_block("blah\n<memory>\nremember this\n</memory>\nbye");
+        assert_eq!(r.as_deref(), Some("remember this"));
+    }
+
+    #[test]
+    fn extraction_is_case_insensitive() {
+        let r = extract_memory_block("<MEMORY>X</Memory>");
+        assert_eq!(r.as_deref(), Some("X"));
+    }
+
+    #[test]
+    fn takes_last_block_when_multiple() {
+        let r = extract_memory_block("<memory>first</memory> mid <memory>second</memory>");
+        assert_eq!(r.as_deref(), Some("second"));
+    }
+
+    #[test]
+    fn no_block_returns_none() {
+        assert_eq!(extract_memory_block("nothing here"), None);
+    }
+
+    #[test]
+    fn empty_block_returns_none() {
+        assert_eq!(extract_memory_block("<memory>   \n  </memory>"), None);
+    }
+
+    #[test]
+    fn handles_non_ascii_before_tag() {
+        // Byte offsets must stay on char boundaries even with multibyte text.
+        let r = extract_memory_block("前言。。。<memory>記住這個</memory>");
+        assert_eq!(r.as_deref(), Some("記住這個"));
+    }
+
+    #[test]
+    fn augmented_prompt_includes_memory_and_comments() {
+        let p = build_augmented_prompt(
+            "do the thing",
+            Some("old note"),
+            &[comment(3, "be careful"), comment(2, "use bullets")],
+        );
+        assert!(p.starts_with("do the thing"));
+        assert!(p.contains("ORCHESTRATOR CONTEXT"));
+        assert!(p.contains("old note"));
+        assert!(p.contains("[run #3"));
+        assert!(p.contains("be careful"));
+        assert!(p.contains(MEMORY_OPEN));
+    }
+
+    #[test]
+    fn augmented_prompt_handles_empty_memory_and_no_comments() {
+        let p = build_augmented_prompt("task", None, &[]);
+        assert!(p.contains("(empty — nothing saved yet)"));
+        assert!(!p.contains("User feedback"));
+    }
 }
