@@ -87,6 +87,7 @@ const en = {
   "sidebar.noMatch": "No tasks match.",
   "sidebar.unnamed": "(unnamed)",
   "sidebar.running": "running",
+  "sidebar.unsaved": "Unsaved changes",
   "sidebar.disabled": "disabled",
   "sidebar.settings": "Settings",
 
@@ -165,6 +166,21 @@ const en = {
   "edit.validate.prompt": "Prompt is empty.",
   "edit.validate.cron": "Cron expression is empty.",
   "edit.validate.once": "Once timestamp is empty.",
+
+  // ---- Memory ----
+  "edit.section.memory": "Memory",
+  "edit.memory.enable": "Enable memory & feedback",
+  "edit.memory.enableHelp":
+    "Inject this task's saved memory and recent comments into the prompt, and parse a <memory> block out of the agent's reply to update memory after each run.",
+  "edit.memory.label": "Saved memory",
+  "edit.memory.placeholder":
+    "Empty. The agent fills this in when its reply includes a <memory> block — or you can edit it here directly.",
+  "edit.memory.save": "Save memory",
+  "edit.memory.clear": "Clear",
+  "edit.memory.saved": "Memory saved.",
+  "edit.memory.updated": "Updated {time}",
+  "edit.memory.loadFailed": "Failed to load memory: {error}",
+  "edit.memory.saveFailed": "Failed to save memory: {error}",
 
   // ---- Schedule editor ----
   "sched.kind.manual": "Manual",
@@ -262,6 +278,18 @@ const en = {
   "hist.reasoning": "Reasoning",
   "hist.tool.input": "input",
   "hist.tool.output": "output",
+  "hist.tab.log": "Run log",
+  "hist.tab.comments": "Comments",
+  "hist.prompt": "Sent prompt",
+  "hist.prompt.summary": "{chars} chars — exactly what was sent to opencode",
+  "hist.comments": "Comments",
+  "hist.comments.hint":
+    "Comments on this task's runs are fed into the next run as feedback (most recent first).",
+  "hist.comments.empty": "No comments on this run yet.",
+  "hist.comments.placeholder": "Add feedback for the next run…",
+  "hist.comments.add": "Add comment",
+  "hist.comments.adding": "Adding…",
+  "hist.comments.delete": "Delete comment",
 } as const;
 
 export type MessageKey = keyof typeof en;
@@ -304,6 +332,7 @@ const zhTW: Record<MessageKey, string> = {
   "sidebar.noMatch": "沒有符合的任務。",
   "sidebar.unnamed": "（未命名）",
   "sidebar.running": "執行中",
+  "sidebar.unsaved": "有未儲存的修改",
   "sidebar.disabled": "已停用",
   "sidebar.settings": "設定",
 
@@ -381,6 +410,21 @@ const zhTW: Record<MessageKey, string> = {
   "edit.validate.prompt": "提示詞不可為空。",
   "edit.validate.cron": "Cron 表達式不可為空。",
   "edit.validate.once": "單次時間戳記不可為空。",
+
+  // ---- Memory ----
+  "edit.section.memory": "記憶",
+  "edit.memory.enable": "啟用記憶與回饋",
+  "edit.memory.enableHelp":
+    "把這個任務已儲存的記憶與最近的留言注入提示詞，並在每次執行後從 agent 回覆中解析 <memory> 區塊來更新記憶。",
+  "edit.memory.label": "已儲存的記憶",
+  "edit.memory.placeholder":
+    "目前為空。當 agent 的回覆包含 <memory> 區塊時會寫入這裡——你也可以直接在此編輯。",
+  "edit.memory.save": "儲存記憶",
+  "edit.memory.clear": "清空",
+  "edit.memory.saved": "記憶已儲存。",
+  "edit.memory.updated": "更新於 {time}",
+  "edit.memory.loadFailed": "載入記憶失敗：{error}",
+  "edit.memory.saveFailed": "儲存記憶失敗：{error}",
 
   // ---- Schedule editor ----
   "sched.kind.manual": "手動",
@@ -478,6 +522,17 @@ const zhTW: Record<MessageKey, string> = {
   "hist.reasoning": "推理",
   "hist.tool.input": "輸入",
   "hist.tool.output": "輸出",
+  "hist.tab.log": "執行紀錄",
+  "hist.tab.comments": "留言",
+  "hist.prompt": "送出的提示詞",
+  "hist.prompt.summary": "{chars} 字元——實際送給 opencode 的完整內容",
+  "hist.comments": "留言",
+  "hist.comments.hint": "此任務各次執行的留言會作為回饋注入下一次執行（最新的在前）。",
+  "hist.comments.empty": "這次執行還沒有留言。",
+  "hist.comments.placeholder": "為下一次執行新增回饋…",
+  "hist.comments.add": "新增留言",
+  "hist.comments.adding": "新增中…",
+  "hist.comments.delete": "刪除留言",
 };
 
 const DICTS: Record<Lang, Record<MessageKey, string>> = {

@@ -20,6 +20,10 @@ pub struct Run {
     /// `finished_at` to flag runs that were killed after a long silence — a
     /// stalled model stream or hung tool call rather than genuine work.
     pub last_activity_at: Option<DateTime<Utc>>,
+    /// The exact prompt sent to opencode for this run, including any memory /
+    /// comment context injected by the runner. `None` for runs created before
+    /// this was recorded. Surfaced read-only in the History tab.
+    pub prompt: Option<String>,
 }
 
 /// One phase of a run — e.g. "Worktree: git fetch --all" or "Run opencode".
@@ -46,6 +50,27 @@ pub struct RunLog {
     pub line_no: i64,
     pub ts: DateTime<Utc>,
     pub text: String,
+}
+
+/// A task's evolving memory — a single blob the agent rewrites across runs
+/// (see `runner::build_augmented_prompt` / `extract_memory_block`). Keyed by
+/// task id so it survives task renames and lives independently of run history.
+#[derive(Debug, Clone, Serialize)]
+pub struct TaskMemory {
+    pub task_id: String,
+    pub content: String,
+    pub updated_at: DateTime<Utc>,
+}
+
+/// A user-written comment attached to one run. Surfaced in the History tab and
+/// fed back (most-recent-N) into the next run's prompt as standing feedback.
+#[derive(Debug, Clone, Serialize)]
+pub struct RunComment {
+    pub id: i64,
+    pub task_id: String,
+    pub run_id: i64,
+    pub text: String,
+    pub created_at: DateTime<Utc>,
 }
 
 #[derive(Clone)]
@@ -97,8 +122,37 @@ impl Db {
                 FOREIGN KEY (run_id) REFERENCES runs(id)
             );
             CREATE INDEX IF NOT EXISTS idx_run_logs_run_id ON run_logs(run_id, id);
+
+            CREATE TABLE IF NOT EXISTS task_memory (
+                task_id      TEXT PRIMARY KEY,
+                content      TEXT NOT NULL,
+                updated_at   TEXT NOT NULL
+            );
+
+            CREATE TABLE IF NOT EXISTS run_comments (
+                id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                task_id      TEXT NOT NULL,
+                run_id       INTEGER NOT NULL,
+                text         TEXT NOT NULL,
+                created_at   TEXT NOT NULL,
+                FOREIGN KEY (run_id) REFERENCES runs(id)
+            );
+            CREATE INDEX IF NOT EXISTS idx_run_comments_run_id  ON run_comments(run_id);
+            CREATE INDEX IF NOT EXISTS idx_run_comments_task_id ON run_comments(task_id, id DESC);
             "#,
         )?;
+
+        // Migration: older DBs predate the `prompt` column on `runs`. Add it if
+        // missing so we can record the exact (memory/comment-augmented) prompt
+        // actually sent to opencode for each run. Runs created before this stay
+        // NULL and the UI just hides the section for them.
+        let has_prompt: bool = conn
+            .prepare("SELECT 1 FROM pragma_table_info('runs') WHERE name = 'prompt'")?
+            .exists([])?;
+        if !has_prompt {
+            conn.execute("ALTER TABLE runs ADD COLUMN prompt TEXT", [])?;
+        }
+
         Ok(Self {
             inner: Arc::new(Mutex::new(conn)),
         })
@@ -164,6 +218,17 @@ impl Db {
         Ok(())
     }
 
+    /// Record the exact prompt sent to opencode for this run (after any memory /
+    /// comment augmentation), so the History tab can show what was really sent.
+    pub fn set_run_prompt(&self, run_id: i64, prompt: &str) -> Result<()> {
+        let conn = self.inner.lock().unwrap();
+        conn.execute(
+            "UPDATE runs SET prompt = ?1 WHERE id = ?2",
+            params![prompt, run_id],
+        )?;
+        Ok(())
+    }
+
     pub fn finish_run(&self, run_id: i64, status: &str, error: Option<&str>) -> Result<()> {
         let conn = self.inner.lock().unwrap();
         let now = Utc::now().to_rfc3339();
@@ -178,7 +243,8 @@ impl Db {
         let conn = self.inner.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT id, task_id, session_id, project_id, started_at, finished_at, status, error,
-                    (SELECT MAX(ts) FROM run_logs WHERE run_id = runs.id) AS last_activity_at
+                    (SELECT MAX(ts) FROM run_logs WHERE run_id = runs.id) AS last_activity_at,
+                    prompt
              FROM runs ORDER BY id DESC LIMIT ?1",
         )?;
         let rows = stmt.query_map(params![limit], row_to_run)?;
@@ -193,7 +259,8 @@ impl Db {
         let conn = self.inner.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT id, task_id, session_id, project_id, started_at, finished_at, status, error,
-                    (SELECT MAX(ts) FROM run_logs WHERE run_id = runs.id) AS last_activity_at
+                    (SELECT MAX(ts) FROM run_logs WHERE run_id = runs.id) AS last_activity_at,
+                    prompt
              FROM runs WHERE task_id = ?1 ORDER BY id DESC LIMIT ?2",
         )?;
         let rows = stmt.query_map(params![task_id, limit], row_to_run)?;
@@ -307,11 +374,18 @@ impl Db {
             placeholders.push('?');
         }
         tx.execute(
-            &format!("DELETE FROM run_logs   WHERE run_id IN ({placeholders})"),
+            &format!("DELETE FROM run_logs     WHERE run_id IN ({placeholders})"),
             params_from_iter(ids.iter()),
         )?;
         tx.execute(
-            &format!("DELETE FROM run_events WHERE run_id IN ({placeholders})"),
+            &format!("DELETE FROM run_events   WHERE run_id IN ({placeholders})"),
+            params_from_iter(ids.iter()),
+        )?;
+        // Comments belong to a run; clearing the run clears its feedback too,
+        // so a "fresh start" doesn't keep injecting comments tied to runs the
+        // user can no longer see. task_memory is intentionally left untouched.
+        tx.execute(
+            &format!("DELETE FROM run_comments WHERE run_id IN ({placeholders})"),
             params_from_iter(ids.iter()),
         )?;
         let removed = tx.execute(
@@ -327,11 +401,103 @@ impl Db {
         let conn = self.inner.lock().unwrap();
         let mut stmt = conn.prepare(
             "SELECT id, task_id, session_id, project_id, started_at, finished_at, status, error,
-                    (SELECT MAX(ts) FROM run_logs WHERE run_id = runs.id) AS last_activity_at
+                    (SELECT MAX(ts) FROM run_logs WHERE run_id = runs.id) AS last_activity_at,
+                    prompt
              FROM runs WHERE id = ?1",
         )?;
         let row = stmt.query_row(params![id], row_to_run).optional()?;
         Ok(row)
+    }
+
+    // ---------- task memory ----------
+
+    pub fn get_task_memory(&self, task_id: &str) -> Result<Option<TaskMemory>> {
+        let conn = self.inner.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT task_id, content, updated_at FROM task_memory WHERE task_id = ?1",
+        )?;
+        let row = stmt
+            .query_row(params![task_id], row_to_task_memory)
+            .optional()?;
+        Ok(row)
+    }
+
+    /// Replace a task's memory. An empty (post-trim) string clears it entirely
+    /// — deleting the row rather than storing a blank — so `get_task_memory`
+    /// reports `None` and the prompt builder shows "(empty)".
+    pub fn set_task_memory(&self, task_id: &str, content: &str) -> Result<()> {
+        let conn = self.inner.lock().unwrap();
+        let trimmed = content.trim();
+        if trimmed.is_empty() {
+            conn.execute(
+                "DELETE FROM task_memory WHERE task_id = ?1",
+                params![task_id],
+            )?;
+            return Ok(());
+        }
+        let now = Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO task_memory (task_id, content, updated_at) VALUES (?1, ?2, ?3)
+             ON CONFLICT(task_id) DO UPDATE SET content = ?2, updated_at = ?3",
+            params![task_id, trimmed, now],
+        )?;
+        Ok(())
+    }
+
+    // ---------- run comments ----------
+
+    /// Most recent comments for a task (newest first), capped at `limit`. Used
+    /// to inject standing feedback into the next run's prompt.
+    pub fn recent_comments_for_task(&self, task_id: &str, limit: i64) -> Result<Vec<RunComment>> {
+        let conn = self.inner.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, task_id, run_id, text, created_at
+             FROM run_comments WHERE task_id = ?1 ORDER BY id DESC LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![task_id, limit], row_to_comment)?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
+    /// All comments on a single run, oldest first (chronological) for the UI.
+    pub fn list_comments_for_run(&self, run_id: i64) -> Result<Vec<RunComment>> {
+        let conn = self.inner.lock().unwrap();
+        let mut stmt = conn.prepare(
+            "SELECT id, task_id, run_id, text, created_at
+             FROM run_comments WHERE run_id = ?1 ORDER BY id ASC",
+        )?;
+        let rows = stmt.query_map(params![run_id], row_to_comment)?;
+        let mut out = Vec::new();
+        for r in rows {
+            out.push(r?);
+        }
+        Ok(out)
+    }
+
+    pub fn add_comment(&self, task_id: &str, run_id: i64, text: &str) -> Result<RunComment> {
+        let conn = self.inner.lock().unwrap();
+        let now = Utc::now().to_rfc3339();
+        conn.execute(
+            "INSERT INTO run_comments (task_id, run_id, text, created_at) VALUES (?1, ?2, ?3, ?4)",
+            params![task_id, run_id, text, now],
+        )?;
+        let id = conn.last_insert_rowid();
+        Ok(RunComment {
+            id,
+            task_id: task_id.to_string(),
+            run_id,
+            text: text.to_string(),
+            created_at: parse_rfc3339(&now),
+        })
+    }
+
+    pub fn delete_comment(&self, id: i64) -> Result<()> {
+        let conn = self.inner.lock().unwrap();
+        conn.execute("DELETE FROM run_comments WHERE id = ?1", params![id])?;
+        Ok(())
     }
 }
 
@@ -349,6 +515,7 @@ fn row_to_run(row: &rusqlite::Row<'_>) -> rusqlite::Result<Run> {
         status: row.get(6)?,
         error: row.get(7)?,
         last_activity_at: last_activity_s.as_deref().map(parse_rfc3339),
+        prompt: row.get(9)?,
     })
 }
 
@@ -375,6 +542,26 @@ fn row_to_log(row: &rusqlite::Row<'_>) -> rusqlite::Result<RunLog> {
         line_no: row.get(3)?,
         ts: parse_rfc3339(&ts_s),
         text: row.get(5)?,
+    })
+}
+
+fn row_to_task_memory(row: &rusqlite::Row<'_>) -> rusqlite::Result<TaskMemory> {
+    let updated_at_s: String = row.get(2)?;
+    Ok(TaskMemory {
+        task_id: row.get(0)?,
+        content: row.get(1)?,
+        updated_at: parse_rfc3339(&updated_at_s),
+    })
+}
+
+fn row_to_comment(row: &rusqlite::Row<'_>) -> rusqlite::Result<RunComment> {
+    let created_at_s: String = row.get(4)?;
+    Ok(RunComment {
+        id: row.get(0)?,
+        task_id: row.get(1)?,
+        run_id: row.get(2)?,
+        text: row.get(3)?,
+        created_at: parse_rfc3339(&created_at_s),
     })
 }
 

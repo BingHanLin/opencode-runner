@@ -16,7 +16,24 @@ export interface Task {
   timeout_secs: number | null;
   /** Free-form labels for sidebar filtering. */
   tags: string[];
+  /** When true, the runner injects saved memory + recent comments into the
+   * prompt and parses a `<memory>` block back out after the run. */
+  memory_enabled: boolean;
   enabled: boolean;
+}
+
+export interface TaskMemory {
+  task_id: string;
+  content: string;
+  updated_at: string;
+}
+
+export interface RunComment {
+  id: number;
+  task_id: string;
+  run_id: number;
+  text: string;
+  created_at: string;
 }
 
 export interface Settings {
@@ -40,6 +57,9 @@ export interface Run {
   /** Timestamp of the run's most recent log line, or null if it produced no
    * output. Used to flag runs killed after a long silence (a stall). */
   last_activity_at: string | null;
+  /** The exact prompt sent to opencode (incl. injected memory/comments), or
+   * null for runs recorded before this was captured. */
+  prompt: string | null;
 }
 
 export interface RunEvent {
@@ -153,6 +173,7 @@ export function newBlankTask(): Task {
     worktree_base: null,
     timeout_secs: 3600,
     tags: [],
+    memory_enabled: false,
     enabled: false,
   };
 }

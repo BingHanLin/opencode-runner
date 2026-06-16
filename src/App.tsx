@@ -26,6 +26,10 @@ export default function App() {
   const [tab, setTab] = useState<TabId>("edit");
   const [view, setView] = useState<View>("empty");
   const [newDraft, setNewDraft] = useState<Task | null>(null);
+  // In-progress, unsaved edits keyed by task id. Lifted out of EditTab so they
+  // survive task switching: leaving a task and coming back restores the edits,
+  // and the sidebar can flag which tasks have pending changes.
+  const [drafts, setDrafts] = useState<Record<string, Task>>({});
   const [events, setEvents] = useState<RunUpdate[]>([]);
   const [status, setStatus] = useState<string | null>(null);
   const [theme, setTheme] = useState<Theme>(() => getInitialTheme());
@@ -50,6 +54,34 @@ export default function App() {
 
   const active = tasks.find((t) => t.id === activeId) ?? null;
   const isNew = !!newDraft && newDraft.id === activeId;
+
+  // The working copy shown in the editor: a stashed draft if one exists,
+  // otherwise the saved task itself.
+  const activeDraft = active ? drafts[active.id] ?? active : null;
+
+  // Tasks whose stashed draft differs from their saved (or, for the new task,
+  // blank) baseline — drives the sidebar's unsaved-changes marker.
+  const dirtyIds = useMemo(() => {
+    const s = new Set<string>();
+    for (const tk of tasks) {
+      const d = drafts[tk.id];
+      if (d && JSON.stringify(d) !== JSON.stringify(tk)) s.add(tk.id);
+    }
+    return s;
+  }, [tasks, drafts]);
+
+  function updateDraft(updated: Task) {
+    setDrafts((d) => ({ ...d, [updated.id]: updated }));
+  }
+
+  function clearDraft(id: string) {
+    setDrafts((d) => {
+      if (!(id in d)) return d;
+      const next = { ...d };
+      delete next[id];
+      return next;
+    });
+  }
 
   const refresh = useCallback(async () => {
     const next = await api.getTasksFile();
@@ -139,6 +171,7 @@ export default function App() {
     await api.saveTasksFile(nextFile);
     await api.restartScheduler();
     setNewDraft(null);
+    clearDraft(updated.id);
     setFile(nextFile);
     setActiveId(updated.id);
     flash(setStatus, t("app.flash.savedRestarted"));
@@ -148,6 +181,7 @@ export default function App() {
     if (!file || !active) return;
     if (newDraft && newDraft.id === active.id) {
       setNewDraft(null);
+      clearDraft(active.id);
       setActiveId(file.tasks[0]?.id ?? null);
       setView(file.tasks[0] ? "task" : "empty");
       return;
@@ -158,6 +192,7 @@ export default function App() {
     };
     await api.saveTasksFile(nextFile);
     await api.restartScheduler();
+    clearDraft(active.id);
     setFile(nextFile);
     setActiveId(nextFile.tasks[0]?.id ?? null);
     setView(nextFile.tasks[0] ? "task" : "empty");
@@ -210,6 +245,7 @@ export default function App() {
         activeId={activeId}
         view={view === "task" ? "task" : view === "settings" ? "settings" : "empty"}
         runningTaskIds={runningTaskIds}
+        dirtyTaskIds={dirtyIds}
         onSelect={selectTask}
         onNew={newTask}
         onSettings={openSettings}
@@ -243,7 +279,10 @@ export default function App() {
             {tab === "edit" ? (
               <EditTab
                 task={active}
+                draft={activeDraft ?? active}
                 isNew={isNew}
+                onChange={updateDraft}
+                onRevert={() => clearDraft(active.id)}
                 onSave={saveTask}
                 onDelete={deleteTask}
                 onRunNow={runActive}

@@ -405,6 +405,13 @@ a:hover {
   align-items: center;
   gap: 6px;
 }
+.task-row .unsaved-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--warn);
+  flex: 0 0 auto;
+}
 .task-row .task-meta {
   display: flex;
   gap: 6px;
@@ -928,6 +935,12 @@ a:hover {
 
 .history-layout {
   display: grid;
+  /* Fill the flex parent (.panel) instead of shrinking to content width.
+     Without this the grid's right `minmax(0,1fr)` column tracks the widest
+     content, so a content-light tab (e.g. Comments) narrows the whole layout
+     — taking the shared tab bar and cards with it. */
+  flex: 1;
+  min-width: 0;
   /* `1fr` alone resolves to `minmax(auto, 1fr)`, so the right column can be
      forced wider by long unbroken tokens (tool output, long URLs) — the cell
      "grows" as the conversation streams in. `minmax(0, 1fr)` hard-pins it. */
@@ -987,8 +1000,8 @@ a:hover {
 }
 .event-arrow {
   color: var(--text-faint);
-  width: 10px;
-  font-size: 10px;
+  width: 14px;
+  font-size: 14px;
   display: inline-flex;
   justify-content: center;
   flex-shrink: 0;
@@ -1015,6 +1028,26 @@ a:hover {
   overflow-wrap: anywhere;
   color: var(--text-muted);
   border: 1px solid var(--border);
+}
+
+/* Inner tabs inside the run-details panel: unlike the top-level .tabs (which
+   sit directly above a .panel with no padding-top), these need breathing room
+   below the tab border before the content, and no side padding so they line up
+   with the full-width sections beneath them. */
+.detail-tabs {
+  margin-top: 4px;
+  margin-bottom: 14px;
+  padding: 0;
+}
+
+.comment-row {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 8px 12px;
+  margin-bottom: 8px;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
 }
 
 .empty-state {

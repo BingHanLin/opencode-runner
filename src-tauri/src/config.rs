@@ -50,6 +50,13 @@ pub struct Task {
     /// fair trade for a stable wire shape.
     #[serde(default)]
     pub tags: Vec<String>,
+    /// When true, the runner injects this task's saved memory and recent user
+    /// comments into the prompt, and parses any `<memory>…</memory>` block the
+    /// agent emits back into storage (see `runner::build_augmented_prompt` /
+    /// `extract_memory_block`). Off by default so tasks that don't opt in keep
+    /// a clean prompt.
+    #[serde(default)]
+    pub memory_enabled: bool,
     #[serde(default)]
     pub enabled: bool,
 }

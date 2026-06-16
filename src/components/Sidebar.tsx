@@ -9,6 +9,8 @@ interface Props {
   activeId: string | null;
   view: "task" | "settings" | "history-all" | "empty";
   runningTaskIds: Set<string>;
+  /** Task ids with unsaved edits, flagged with a marker in the list. */
+  dirtyTaskIds: Set<string>;
   onSelect: (id: string) => void;
   onNew: () => void;
   onSettings: () => void;
@@ -21,6 +23,7 @@ export function Sidebar({
   activeId,
   view,
   runningTaskIds,
+  dirtyTaskIds,
   onSelect,
   onNew,
   onSettings,
@@ -178,6 +181,13 @@ export function Sidebar({
               }}
             >
               <div className="task-name">
+                {dirtyTaskIds.has(t.id) && (
+                  <span
+                    className="unsaved-dot"
+                    title={tr("sidebar.unsaved")}
+                    aria-label={tr("sidebar.unsaved")}
+                  />
+                )}
                 <span>{t.name || tr("sidebar.unnamed")}</span>
                 {runningTaskIds.has(t.id) && (
                   <span className="chip info">
