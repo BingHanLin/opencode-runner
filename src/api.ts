@@ -1,6 +1,7 @@
 // Thin wrappers over Tauri's `invoke`. Centralized so component code never
 // touches the IPC strings directly — easier to audit, easier to refactor.
 
+import { getVersion } from "@tauri-apps/api/app";
 import { invoke } from "@tauri-apps/api/core";
 import { listen, type UnlistenFn } from "@tauri-apps/api/event";
 import { open } from "@tauri-apps/plugin-dialog";
@@ -54,6 +55,9 @@ export const api = {
     invoke<boolean>("is_git_repo_path", { path }),
   showMainWindow: () => invoke<void>("show_main_window"),
   storagePaths: () => invoke<StoragePaths>("storage_paths"),
+  // The running app's version, read from the bundle (tauri.conf.json) — so it
+  // always reflects the actually-installed build, not a hardcoded string.
+  appVersion: () => getVersion(),
 };
 
 export async function pickDirectory(): Promise<string | null> {

@@ -33,11 +33,16 @@ export default function App() {
   const [events, setEvents] = useState<RunUpdate[]>([]);
   const [status, setStatus] = useState<string | null>(null);
   const [theme, setTheme] = useState<Theme>(() => getInitialTheme());
+  const [version, setVersion] = useState("");
 
   useEffect(() => {
     applyTheme(theme);
     saveTheme(theme);
   }, [theme]);
+
+  useEffect(() => {
+    api.appVersion().then(setVersion).catch(() => {});
+  }, []);
 
   // Track which task ids currently have a running run, for the sidebar pill.
   // Stored as state (not a ref) so the Set's identity changes on each update
@@ -312,6 +317,7 @@ export default function App() {
           )}
         </span>
         <div className="status-bar-right">
+          {version && <span className="status-version">v{version}</span>}
           <span>{status ?? t("app.status.ready")}</span>
           <ThemeToggle
             theme={theme}
