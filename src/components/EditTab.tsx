@@ -1,5 +1,11 @@
-import { useEffect, useMemo, useState, type KeyboardEvent } from "react";
-import { api, pickDirectory } from "../api";
+import {
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  type KeyboardEvent,
+} from "react";
+import { api, onRunUpdate, pickDirectory } from "../api";
 import { useT } from "../LanguageProvider";
 import type { MessageKey } from "../i18n";
 import type { Model, Task, TaskMemory } from "../types";
@@ -354,6 +360,36 @@ function MemorySection({ taskId }: { taskId: string }) {
   }, [taskId, t]);
 
   const dirty = content !== (loaded?.content ?? "");
+
+  // A run writes the agent's `<memory>` block to the DB *before* it emits the
+  // `finished` event, so by the time we hear about it the new memory is already
+  // persisted — just re-fetch. We skip the refresh while the user has unsaved
+  // edits (`dirty`) so we never clobber what they're typing; a ref keeps the
+  // listener reading the latest dirty state without re-subscribing each render.
+  const dirtyRef = useRef(dirty);
+  dirtyRef.current = dirty;
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let cancelled = false;
+    onRunUpdate((u) => {
+      if (u.kind !== "finished" || u.task_id !== taskId) return;
+      if (dirtyRef.current) return;
+      api
+        .getTaskMemory(taskId)
+        .then((m) => {
+          setLoaded(m);
+          setContent(m?.content ?? "");
+        })
+        .catch(() => {});
+    }).then((fn) => {
+      if (cancelled) fn();
+      else unlisten = fn;
+    });
+    return () => {
+      cancelled = true;
+      unlisten?.();
+    };
+  }, [taskId]);
 
   async function persist(next: string) {
     setBusy(true);

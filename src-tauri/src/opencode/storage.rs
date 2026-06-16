@@ -7,8 +7,16 @@
 //! `data`; the columns we care about (`id`, `session_id`, `message_id`) are
 //! still real columns, and the rest comes out of the JSON.
 //!
-//! We open the DB in *read-only + immutable* mode (`?mode=ro&immutable=1`) so
-//! that we never take any lock against the live `opencode` writer's WAL.
+//! We open the DB *read-only* (`?mode=ro`). Crucially we do NOT pass
+//! `immutable=1`: that flag makes SQLite ignore the `-wal` file entirely and
+//! read only the main database file, so any rows the live `opencode` server has
+//! written but not yet checkpointed (which, with a long-lived server, is every
+//! recent message) are invisible. That silently broke memory extraction — the
+//! agent's final reply, still WAL-resident at read time, was never seen. A
+//! plain read-only connection reads the WAL via the writer's existing `-shm`.
+//! If that open fails (e.g. opencode isn't running and left an orphaned `-wal`
+//! with no `-shm` to attach to), we fall back to `immutable=1` — a stale view
+//! is better than no view.
 
 use anyhow::{Context, Result};
 use rusqlite::{Connection, OpenFlags};
@@ -86,16 +94,26 @@ fn open_ro() -> Result<Connection> {
             p.display()
         );
     }
-    // `immutable=1` tells SQLite to skip WAL/locks entirely, which is what we
-    // want when the live opencode process is also writing to this file. We
-    // also use READ_ONLY so we can't accidentally modify anything.
+    // Read-only so we can never modify opencode's data. We deliberately avoid
+    // `immutable=1` so the connection reads the live `-wal` (via the writer's
+    // `-shm`) and sees recently-written rows. Only if that fails — e.g. an
+    // orphaned `-wal` with no `-shm` to attach to while opencode is down — do
+    // we retry with `immutable=1`, which ignores the WAL but at least opens.
     let path_str = p.to_string_lossy().replace('\\', "/");
-    let uri = format!("file:{}?mode=ro&immutable=1", path_str);
-    Connection::open_with_flags(
-        &uri,
-        OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI,
-    )
-    .with_context(|| format!("opening {}", p.display()))
+    let flags = OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_URI;
+    let uri = format!("file:{}?mode=ro", path_str);
+    match Connection::open_with_flags(&uri, flags) {
+        Ok(conn) => Ok(conn),
+        Err(e) => {
+            tracing::debug!(
+                "read-only open of {} failed ({e}); retrying with immutable=1 (stale WAL)",
+                p.display()
+            );
+            let uri = format!("file:{}?mode=ro&immutable=1", path_str);
+            Connection::open_with_flags(&uri, flags)
+                .with_context(|| format!("opening {}", p.display()))
+        }
+    }
 }
 
 pub fn list_messages(session_id: &str) -> Result<Vec<Message>> {

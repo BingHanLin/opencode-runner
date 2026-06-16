@@ -142,6 +142,7 @@ export type RunUpdate =
   | {
       kind: "finished";
       run_id: number;
+      task_id: string;
       status: string;
       error: string | null;
     };

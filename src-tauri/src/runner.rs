@@ -86,7 +86,7 @@ pub enum RunUpdate {
         line_no: i64,
         text: String,
     },
-    Finished { run_id: i64, status: String, error: Option<String> },
+    Finished { run_id: i64, task_id: String, status: String, error: Option<String> },
 }
 
 pub type RunNotifier = Arc<dyn Fn(RunUpdate) + Send + Sync>;
@@ -185,6 +185,7 @@ pub async fn execute(
             db.finish_run(run_id, "error", Some(&msg))?;
             ctx.emit(RunUpdate::Finished {
                 run_id,
+                task_id: task.id.clone(),
                 status: "error".into(),
                 error: Some(msg.clone()),
             });
@@ -385,6 +386,7 @@ pub async fn execute(
 
     ctx.emit(RunUpdate::Finished {
         run_id,
+        task_id: task.id.clone(),
         status: final_status.to_string(),
         error: final_error,
     });
