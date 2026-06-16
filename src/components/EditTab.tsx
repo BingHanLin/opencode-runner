@@ -15,23 +15,35 @@ import { ScheduleEditor } from "./ScheduleEditor";
 
 interface Props {
   task: Task;
+  /** The working copy being edited; persisted by the parent across switches. */
+  draft: Task;
   isNew: boolean;
+  onChange: (updated: Task) => void;
+  onRevert: () => void;
   onSave: (updated: Task) => Promise<void>;
   onDelete: () => Promise<void>;
   onRunNow: () => Promise<void>;
 }
 
-export function EditTab({ task, isNew, onSave, onDelete, onRunNow }: Props) {
+export function EditTab({
+  task,
+  draft,
+  isNew,
+  onChange,
+  onRevert,
+  onSave,
+  onDelete,
+  onRunNow,
+}: Props) {
   const t = useT();
-  const [draft, setDraft] = useState<Task>(task);
   const [models, setModels] = useState<Model[]>([]);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
 
   useEffect(() => {
-    setDraft(task);
     setConfirmDelete(false);
+    setMessage(null);
   }, [task.id]);
 
   useEffect(() => {
@@ -46,7 +58,7 @@ export function EditTab({ task, isNew, onSave, onDelete, onRunNow }: Props) {
   const validation = useMemo(() => validate(draft), [draft]);
 
   function set<K extends keyof Task>(k: K, v: Task[K]) {
-    setDraft((d) => ({ ...d, [k]: v }));
+    onChange({ ...draft, [k]: v });
   }
 
   async function browseWorkingDir() {
@@ -82,7 +94,7 @@ export function EditTab({ task, isNew, onSave, onDelete, onRunNow }: Props) {
             {busy ? t("btn.saving") : t("btn.save")}
           </button>
           {dirty && (
-            <button className="btn" onClick={() => setDraft(task)}>
+            <button className="btn" onClick={onRevert}>
               {t("btn.revert")}
             </button>
           )}

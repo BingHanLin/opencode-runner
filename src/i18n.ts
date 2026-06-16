@@ -87,6 +87,7 @@ const en = {
   "sidebar.noMatch": "No tasks match.",
   "sidebar.unnamed": "(unnamed)",
   "sidebar.running": "running",
+  "sidebar.unsaved": "Unsaved changes",
   "sidebar.disabled": "disabled",
   "sidebar.settings": "Settings",
 
@@ -304,6 +305,7 @@ const zhTW: Record<MessageKey, string> = {
   "sidebar.noMatch": "沒有符合的任務。",
   "sidebar.unnamed": "（未命名）",
   "sidebar.running": "執行中",
+  "sidebar.unsaved": "有未儲存的修改",
   "sidebar.disabled": "已停用",
   "sidebar.settings": "設定",
 

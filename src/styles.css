@@ -405,6 +405,13 @@ a:hover {
   align-items: center;
   gap: 6px;
 }
+.task-row .unsaved-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--warn);
+  flex: 0 0 auto;
+}
 .task-row .task-meta {
   display: flex;
   gap: 6px;
