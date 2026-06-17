@@ -51,10 +51,10 @@ pub struct Task {
     #[serde(default)]
     pub tags: Vec<String>,
     /// When true, the runner injects this task's saved memory and recent user
-    /// comments into the prompt, and parses any `<memory>…</memory>` block the
-    /// agent emits back into storage (see `runner::build_augmented_prompt` /
-    /// `extract_memory_block`). Off by default so tasks that don't opt in keep
-    /// a clean prompt.
+    /// comments into the prompt (see `runner::build_augmented_prompt`) and wires
+    /// in a task-scoped MCP server (`crate::mcp_memory`) so the agent can update
+    /// its memory mid-run via the `orchmem_*` tools. Off by default so tasks
+    /// that don't opt in keep a clean prompt.
     #[serde(default)]
     pub memory_enabled: bool,
     #[serde(default)]

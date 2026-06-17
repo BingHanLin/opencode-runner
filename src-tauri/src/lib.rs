@@ -4,6 +4,7 @@
 pub mod commands;
 pub mod config;
 pub mod db;
+pub mod mcp_memory;
 pub mod opencode;
 pub mod proc;
 pub mod runner;
@@ -216,7 +217,7 @@ async fn graceful_shutdown(app: tauri::AppHandle) {
 
     let tokens: Vec<CancelToken> = {
         let reg = state.registry.lock().unwrap();
-        reg.values().cloned().collect()
+        reg.tokens()
     };
     if !tokens.is_empty() {
         tracing::info!("graceful shutdown: cancelling {} in-flight run(s)", tokens.len());

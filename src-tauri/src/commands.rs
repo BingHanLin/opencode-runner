@@ -252,7 +252,7 @@ pub async fn run_now(
 #[tauri::command]
 pub fn abort_run(state: State<'_, AppState>, run_id: i64) -> Result<(), String> {
     let registry = state.registry.lock().unwrap();
-    match registry.get(&run_id) {
+    match registry.token_for(run_id) {
         Some(token) => {
             token.cancel();
             Ok(())

@@ -134,6 +134,10 @@ impl Cli {
         // here in order, tagged with which stream it came from. Used by the
         // runner to persist and broadcast logs without coupling cli.rs to db.
         log_sink: Option<LogSink>,
+        // Optional ephemeral opencode config (JSON) handed to this single run via
+        // OPENCODE_CONFIG_CONTENT. The runner uses it to register the scoped
+        // memory MCP server. Merges over the user's config; never persisted.
+        config_content: Option<&str>,
     ) -> Result<RunOutcome> {
         let trimmed = prompt.trim();
         if trimmed.is_empty() {
@@ -155,6 +159,10 @@ impl Cli {
         // `--` terminates flag parsing so a prompt that starts with `-` is not
         // mistaken for a flag; the prompt itself is one positional argument.
         cmd.arg("--").arg(trimmed);
+
+        if let Some(cfg) = config_content {
+            cmd.env("OPENCODE_CONFIG_CONTENT", cfg);
+        }
 
         cmd.stdin(Stdio::null())
             .stdout(Stdio::piped())

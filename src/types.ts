@@ -17,7 +17,7 @@ export interface Task {
   /** Free-form labels for sidebar filtering. */
   tags: string[];
   /** When true, the runner injects saved memory + recent comments into the
-   * prompt and parses a `<memory>` block back out after the run. */
+   * prompt and exposes MCP memory tools the agent uses to update it mid-run. */
   memory_enabled: boolean;
   enabled: boolean;
 }

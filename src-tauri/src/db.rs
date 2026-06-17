@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension, Transaction};
 use serde::Serialize;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 #[derive(Debug, Clone, Serialize)]
@@ -52,9 +52,9 @@ pub struct RunLog {
     pub text: String,
 }
 
-/// A task's evolving memory — a single blob the agent rewrites across runs
-/// (see `runner::build_augmented_prompt` / `extract_memory_block`). Keyed by
-/// task id so it survives task renames and lives independently of run history.
+/// A task's evolving memory — a single blob the agent updates across runs via
+/// the scoped MCP memory tools (see `crate::mcp_memory`). Keyed by task id so it
+/// survives task renames and lives independently of run history.
 #[derive(Debug, Clone, Serialize)]
 pub struct TaskMemory {
     pub task_id: String,
@@ -76,6 +76,7 @@ pub struct RunComment {
 #[derive(Clone)]
 pub struct Db {
     inner: Arc<Mutex<Connection>>,
+    path: PathBuf,
 }
 
 impl Db {
@@ -85,6 +86,15 @@ impl Db {
         }
         let conn = Connection::open(path)
             .with_context(|| format!("opening db at {}", path.display()))?;
+        // WAL lets the main app and the out-of-process MCP memory server (which
+        // opens this same file independently) read/write concurrently; the
+        // busy_timeout makes a writer wait briefly for a competing writer
+        // instead of failing with SQLITE_BUSY. Memory writes are tiny and rare,
+        // so contention is negligible. Best-effort: a PRAGMA failure here
+        // shouldn't stop the app from opening the db.
+        let _ = conn.execute_batch(
+            "PRAGMA journal_mode = WAL;\nPRAGMA busy_timeout = 5000;",
+        );
         conn.execute_batch(
             r#"
             CREATE TABLE IF NOT EXISTS runs (
@@ -155,7 +165,14 @@ impl Db {
 
         Ok(Self {
             inner: Arc::new(Mutex::new(conn)),
+            path: path.to_path_buf(),
         })
+    }
+
+    /// Filesystem path this db was opened from. Used to hand the out-of-process
+    /// MCP memory server the exact same database file via an env var.
+    pub fn path(&self) -> &Path {
+        &self.path
     }
 
     /// Mark every run still flagged `running` (plus any open step events) as
@@ -447,6 +464,32 @@ impl Db {
         conn.execute(
             "INSERT INTO task_memory (task_id, content, updated_at) VALUES (?1, ?2, ?3)
              ON CONFLICT(task_id) DO UPDATE SET content = ?2, updated_at = ?3",
+            params![task_id, trimmed, now],
+        )?;
+        Ok(())
+    }
+
+    /// Atomically append `text` as a new line to a task's memory in a single
+    /// statement. Unlike a read-then-`set_task_memory`, this can't lose a
+    /// concurrent append from another writer (the orchestrator's manual edit, or
+    /// — defensively — another run), since the read-modify-write happens inside
+    /// one UPDATE under the write lock. Creates the row with `text` as the whole
+    /// content if none exists. Empty/whitespace `text` is a no-op.
+    pub fn append_task_memory(&self, task_id: &str, text: &str) -> Result<()> {
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            return Ok(());
+        }
+        let conn = self.inner.lock().unwrap();
+        let now = Utc::now().to_rfc3339();
+        // char(10) is a newline; on an existing row this concatenates
+        // "<old>\n<new>". A stored row is always non-empty (set_task_memory
+        // deletes on empty), so there's never a leading blank line.
+        conn.execute(
+            "INSERT INTO task_memory (task_id, content, updated_at) VALUES (?1, ?2, ?3)
+             ON CONFLICT(task_id) DO UPDATE SET
+                 content = content || char(10) || ?2,
+                 updated_at = ?3",
             params![task_id, trimmed, now],
         )?;
         Ok(())

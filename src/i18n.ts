@@ -184,10 +184,10 @@ const en = {
   "edit.section.memory": "Memory",
   "edit.memory.enable": "Enable memory & feedback",
   "edit.memory.enableHelp":
-    "Inject this task's saved memory and recent comments into the prompt, and parse a <memory> block out of the agent's reply to update memory after each run.",
+    "Inject this task's saved memory and recent comments into the prompt, and give the agent memory tools (over MCP) it can call mid-run to update this memory.",
   "edit.memory.label": "Saved memory",
   "edit.memory.placeholder":
-    "Empty. The agent fills this in when its reply includes a <memory> block — or you can edit it here directly.",
+    "Empty. The agent fills this in by calling its memory tools during a run — or you can edit it here directly.",
   "edit.memory.save": "Save memory",
   "edit.memory.clear": "Clear",
   "edit.memory.saved": "Memory saved.",
@@ -441,10 +441,10 @@ const zhTW: Record<MessageKey, string> = {
   "edit.section.memory": "記憶",
   "edit.memory.enable": "啟用記憶與回饋",
   "edit.memory.enableHelp":
-    "把這個任務已儲存的記憶與最近的留言注入提示詞，並在每次執行後從 agent 回覆中解析 <memory> 區塊來更新記憶。",
+    "把這個任務已儲存的記憶與最近的留言注入提示詞，並提供 agent 一組記憶工具（透過 MCP），讓它在執行中自行更新這份記憶。",
   "edit.memory.label": "已儲存的記憶",
   "edit.memory.placeholder":
-    "目前為空。當 agent 的回覆包含 <memory> 區塊時會寫入這裡——你也可以直接在此編輯。",
+    "目前為空。agent 會在執行中呼叫記憶工具來寫入這裡——你也可以直接在此編輯。",
   "edit.memory.save": "儲存記憶",
   "edit.memory.clear": "清空",
   "edit.memory.saved": "記憶已儲存。",

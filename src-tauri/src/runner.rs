@@ -3,7 +3,7 @@ use crate::db::{Db, RunComment};
 use crate::opencode::{Cli, LogSink};
 use anyhow::{anyhow, Result};
 use serde::Serialize;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 use std::process::Stdio;
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
@@ -61,12 +61,79 @@ impl CancelToken {
     }
 }
 
-/// Map of in-flight `run_id`s to their cancel token. The UI holds an `Arc`
-/// clone; clicking Stop on a run pulls the token out and calls `cancel()`.
-pub type CancelRegistry = Arc<Mutex<HashMap<i64, CancelToken>>>;
+/// In-flight run bookkeeping behind one mutex: cancel tokens keyed by `run_id`
+/// (the UI's Stop pulls a token out and calls `cancel()`), plus the set of task
+/// ids that currently have a run in flight. Co-locating them lets "is this task
+/// already running? if not, reserve it" happen atomically, so the same task
+/// can't start two overlapping runs that would race on its memory/state.
+#[derive(Default)]
+pub struct RunRegistry {
+    by_run: HashMap<i64, CancelToken>,
+    active_tasks: HashSet<String>,
+}
+
+impl RunRegistry {
+    /// Reserve `task_id` for a new run: returns `true` if it was free (caller
+    /// may start) or `false` if a run for this task is already in flight (caller
+    /// must skip). Atomic under the registry lock.
+    pub fn try_reserve(&mut self, task_id: &str) -> bool {
+        self.active_tasks.insert(task_id.to_string())
+    }
+    /// Drop a reservation taken by `try_reserve` before a `run_id` existed
+    /// (e.g. the run row couldn't be created).
+    pub fn unreserve(&mut self, task_id: &str) {
+        self.active_tasks.remove(task_id);
+    }
+    /// Bind a reserved run's cancel token once its `run_id` is known.
+    pub fn attach(&mut self, run_id: i64, token: CancelToken) {
+        self.by_run.insert(run_id, token);
+    }
+    /// Release a finished/failed run: both its token and its task reservation.
+    pub fn release(&mut self, run_id: i64, task_id: &str) {
+        self.by_run.remove(&run_id);
+        self.active_tasks.remove(task_id);
+    }
+    /// Cancel token for a run, if still in flight (used by the Stop command).
+    pub fn token_for(&self, run_id: i64) -> Option<CancelToken> {
+        self.by_run.get(&run_id).cloned()
+    }
+    /// Snapshot of all in-flight cancel tokens (used by graceful shutdown).
+    pub fn tokens(&self) -> Vec<CancelToken> {
+        self.by_run.values().cloned().collect()
+    }
+    /// Number of in-flight runs.
+    pub fn len(&self) -> usize {
+        self.by_run.len()
+    }
+    /// True when no run is in flight.
+    pub fn is_empty(&self) -> bool {
+        self.by_run.is_empty()
+    }
+}
+
+/// Shared `RunRegistry`. The UI/scheduler/runner all hold an `Arc` clone.
+pub type CancelRegistry = Arc<Mutex<RunRegistry>>;
 
 pub fn new_cancel_registry() -> CancelRegistry {
-    Arc::new(Mutex::new(HashMap::new()))
+    Arc::new(Mutex::new(RunRegistry::default()))
+}
+
+/// RAII handle that releases a run's registry slot (cancel token + task
+/// reservation) on drop, so every exit path from `execute` — including early
+/// `?` returns — frees the slot and unblocks the next run of the task.
+struct RunSlot<'a> {
+    registry: &'a CancelRegistry,
+    run_id: i64,
+    task_id: String,
+}
+
+impl Drop for RunSlot<'_> {
+    fn drop(&mut self) {
+        self.registry
+            .lock()
+            .unwrap()
+            .release(self.run_id, &self.task_id);
+    }
 }
 
 /// Lifecycle event emitted by the runner — consumed by the Tauri layer to
@@ -149,8 +216,22 @@ pub async fn execute(
     // Per-task run-history cap from settings. After the run finishes, older
     // finished runs beyond this many are pruned. None/Some(0) = unlimited.
     max_history: Option<u64>,
-) -> Result<i64> {
-    let run_id = db.insert_run_start(&task.id)?;
+) -> Result<Option<i64>> {
+    // One run per task at a time: if a run for this task is already in flight,
+    // skip rather than start a second that would race on its memory/state.
+    // Reserve atomically so two near-simultaneous triggers can't both pass.
+    if !registry.lock().unwrap().try_reserve(&task.id) {
+        tracing::warn!(task = %task.id, "skipping run: a run for this task is already in flight");
+        return Ok(None);
+    }
+    let run_id = match db.insert_run_start(&task.id) {
+        Ok(id) => id,
+        Err(e) => {
+            // Couldn't create the run row — drop the reservation we just took.
+            registry.lock().unwrap().unreserve(&task.id);
+            return Err(e);
+        }
+    };
     tracing::info!(task = %task.id, run_id, "starting task");
 
     let ctx = RunCtx {
@@ -163,7 +244,13 @@ pub async fn execute(
     });
 
     let cancel = CancelToken::new();
-    registry.lock().unwrap().insert(run_id, cancel.clone());
+    registry.lock().unwrap().attach(run_id, cancel.clone());
+    // From here on, every exit path (incl. early `?` returns) frees the slot.
+    let _slot = RunSlot {
+        registry,
+        run_id,
+        task_id: task.id.clone(),
+    };
 
     // Per-task timeout: spawn a sleep that flips the cancel token with a
     // distinct reason. Aborted via `JoinHandle::abort` once execute() falls
@@ -193,7 +280,7 @@ pub async fn execute(
                 error: Some(msg.clone()),
             });
             tracing::error!(task = %task.id, run_id, "{msg}");
-            registry.lock().unwrap().remove(&run_id);
+            // `_slot` releases the registry slot on return.
             return Err(e);
         }
     };
@@ -203,17 +290,32 @@ pub async fn execute(
         .unwrap_or(task.working_dir.as_path());
 
     // When the task opts into memory, fold its saved memory plus recent user
-    // comments into the prompt (and tell the agent how to update its memory).
-    // Otherwise the prompt is sent verbatim so non-opted tasks stay clean.
+    // comments into the prompt and register a per-run, task-scoped MCP server
+    // (this binary, `mcp-memory` subcommand) that lets the agent read/update its
+    // memory mid-run via tools. Otherwise the prompt is sent verbatim so
+    // non-opted tasks stay clean.
+    let saved_memory = if task.memory_enabled {
+        db.get_task_memory(&task.id).ok().flatten()
+    } else {
+        None
+    };
+    // Ephemeral opencode config wiring the scoped memory MCP server. `None` if
+    // memory is off or we couldn't resolve our own exe path — in the latter
+    // (degenerate) case the prompt shows memory read-only with no update path.
+    let mcp_config: Option<String> = if task.memory_enabled {
+        crate::mcp_memory::opencode_config_content(&task.id, db.path())
+    } else {
+        None
+    };
     let effective_prompt: String = if task.memory_enabled {
-        let memory = db.get_task_memory(&task.id).ok().flatten();
         let comments = db
             .recent_comments_for_task(&task.id, 10)
             .unwrap_or_default();
         build_augmented_prompt(
             &task.prompt,
-            memory.as_ref().map(|m| m.content.as_str()),
+            saved_memory.as_ref().map(|m| m.content.as_str()),
             &comments,
+            mcp_config.is_some(),
         )
     } else {
         task.prompt.clone()
@@ -285,6 +387,7 @@ pub async fn execute(
             cancel.clone(),
             on_session,
             Some(log_sink),
+            mcp_config.as_deref(),
         )
         .await;
 
@@ -339,32 +442,10 @@ pub async fn execute(
 
     db.finish_run(run_id, final_status, final_error.as_deref())?;
 
-    // If memory is on and the run produced a session, parse the agent's final
-    // reply for a `<memory>…</memory>` block and persist it (replacing prior
-    // memory). No block → memory left untouched. Best-effort: failures here
-    // never change the run's recorded outcome.
-    if task.memory_enabled {
-        let session_id = match &outcome {
-            Ok(o) => o.session_id.clone(),
-            Err(_) => None,
-        };
-        if let Some(sid) = session_id {
-            match extract_memory_from_session(&sid) {
-                Some(content) => match db.set_task_memory(&task.id, &content) {
-                    Ok(()) => tracing::info!(
-                        task = %task.id,
-                        "updated task memory ({} chars) from run {run_id}",
-                        content.len()
-                    ),
-                    Err(e) => tracing::warn!(task = %task.id, "saving task memory failed: {e:#}"),
-                },
-                None => tracing::debug!(
-                    task = %task.id,
-                    "no <memory> block in run {run_id} final reply; memory unchanged"
-                ),
-            }
-        }
-    }
+    // No post-run memory handling: a memory-enabled task updates its memory
+    // in-run by calling the scoped MCP tools (orchmem_*), which write straight
+    // to the db. The History tab's memory panel reflects those writes via the
+    // row's updated_at.
 
     // Tear the worktree down regardless of success/failure. Cleanup errors
     // are logged but don't override the run's outcome — a dangling worktree
@@ -393,7 +474,7 @@ pub async fn execute(
         status: final_status.to_string(),
         error: final_error,
     });
-    registry.lock().unwrap().remove(&run_id);
+    // `_slot` releases the registry slot when execute() returns below.
 
     // Enforce the run-history retention cap now that this run is recorded.
     // Best-effort: a prune failure is logged but never changes the outcome.
@@ -409,7 +490,7 @@ pub async fn execute(
 
     // Map Err outcome from cli back to a top-level error so callers see it.
     match outcome {
-        Ok(_) => Ok(run_id),
+        Ok(_) => Ok(Some(run_id)),
         Err(e) => Err(e),
     }
 }
@@ -671,24 +752,25 @@ fn copy_recursive_sync(src: &Path, dst: &Path) -> std::io::Result<()> {
 //                          Memory / comment injection
 // ============================================================================
 
-/// Marker tags the agent uses to write memory. Kept here so the prompt builder
-/// and the parser can't drift apart.
-const MEMORY_OPEN: &str = "<memory>";
-const MEMORY_CLOSE: &str = "</memory>";
-
-/// Compose the prompt actually sent to opencode for a memory-enabled task:
-/// the user's prompt, then an orchestrator-managed context block carrying the
-/// saved memory, recent user comments, and instructions for updating memory.
+/// Compose the prompt actually sent to opencode for a memory-enabled task, as a
+/// sequence of `##`-headed sections: the user's objective, the saved memory,
+/// recent user comments (when any), and (when `tools_available`) a pointer to
+/// the MCP memory tools the agent uses to update its memory. `tools_available`
+/// is false only in the degenerate case where the MCP server couldn't be wired
+/// in, in which case the memory is shown read-only with no update mechanism.
 /// Pure (no I/O) so it can be unit-tested.
-fn build_augmented_prompt(prompt: &str, memory: Option<&str>, comments: &[RunComment]) -> String {
+fn build_augmented_prompt(
+    prompt: &str,
+    memory: Option<&str>,
+    comments: &[RunComment],
+    tools_available: bool,
+) -> String {
     let mut out = String::with_capacity(prompt.len() + 512);
-    out.push_str(prompt.trim_end());
-    out.push_str(
-        "\n\n================ ORCHESTRATOR CONTEXT ================\n\
-         These sections are managed by the orchestrator across runs of this task.\n",
-    );
+    out.push_str("## Current objective\n");
+    out.push_str(prompt.trim());
+    out.push('\n');
 
-    out.push_str("\n## Your memory (saved from previous runs)\n");
+    out.push_str("\n## Your memory (accumulated from previous runs)\n");
     match memory.map(str::trim).filter(|m| !m.is_empty()) {
         Some(m) => {
             out.push_str(m);
@@ -698,7 +780,7 @@ fn build_augmented_prompt(prompt: &str, memory: Option<&str>, comments: &[RunCom
     }
 
     if !comments.is_empty() {
-        out.push_str("\n## User feedback on previous runs (most recent first)\n");
+        out.push_str("\n## User feedback (most recent first)\n");
         for c in comments {
             // Comments arrive newest-first; render one bullet each, tagged with
             // the run they were left on and when, so the agent can weigh them.
@@ -712,76 +794,20 @@ fn build_augmented_prompt(prompt: &str, memory: Option<&str>, comments: &[RunCom
         }
     }
 
-    out.push_str(&format!(
-        "\n## Saving memory\n\
-         If anything is worth remembering for your future runs of this task, end your reply\n\
-         with a block exactly like:\n\
-         {MEMORY_OPEN}\n\
-         …what to remember…\n\
-         {MEMORY_CLOSE}\n\
-         This block REPLACES your entire current memory shown above, so include anything from\n\
-         it you still want to keep. Omit the block to leave your memory unchanged.\n\
-         =====================================================\n"
-    ));
+    if tools_available {
+        out.push_str(
+            "\n## Updating your memory\n\
+             You have memory tools (provided over MCP, exposed with the `orchmem_` prefix):\n\
+             - `orchmem_memory_get` — read your current saved memory.\n\
+             - `orchmem_memory_set` — replace your entire saved memory with new content.\n\
+             - `orchmem_memory_append` — add a note to your memory without rewriting it.\n\
+             Your current memory is shown above for convenience. If anything is worth remembering\n\
+             for your future runs of this task, call `orchmem_memory_append` (for incremental\n\
+             notes) or `orchmem_memory_set` (to rewrite) before you finish. If nothing changed,\n\
+             don't call them. These tools only affect THIS task's memory.\n",
+        );
+    }
     out
-}
-
-/// Pull the agent's final assistant reply out of the opencode session and
-/// extract its `<memory>` block, if any. Best-effort: any storage error or
-/// missing session yields `None`.
-fn extract_memory_from_session(session_id: &str) -> Option<String> {
-    let convo = crate::opencode::storage::load_conversation(session_id).ok()?;
-    let mut text = String::new();
-    for (msg, parts) in convo.iter().rev() {
-        if msg.role.as_deref() == Some("assistant") {
-            for p in parts {
-                if p.kind.as_deref() == Some("text") {
-                    if let Some(t) = &p.text {
-                        text.push_str(t);
-                        text.push('\n');
-                    }
-                }
-            }
-            break;
-        }
-    }
-    extract_memory_block(&text)
-}
-
-/// Extract the inner content of the last `<memory>…</memory>` block in `text`,
-/// trimmed. Case-insensitive on the tags, spans newlines, and returns `None`
-/// when there's no block or the block is empty. Pure, for unit testing.
-fn extract_memory_block(text: &str) -> Option<String> {
-    let open_pos = rfind_ci(text, MEMORY_OPEN)?;
-    let after = open_pos + MEMORY_OPEN.len();
-    let close_rel = find_ci(&text[after..], MEMORY_CLOSE)?;
-    let inner = text[after..after + close_rel].trim();
-    if inner.is_empty() {
-        None
-    } else {
-        Some(inner.to_string())
-    }
-}
-
-/// First byte index of `needle` in `haystack`, ASCII-case-insensitively.
-/// `needle` is ASCII (our tags), so matches land on char boundaries.
-fn find_ci(haystack: &str, needle: &str) -> Option<usize> {
-    let (hb, nb) = (haystack.as_bytes(), needle.as_bytes());
-    if nb.is_empty() || hb.len() < nb.len() {
-        return None;
-    }
-    (0..=hb.len() - nb.len()).find(|&i| hb[i..i + nb.len()].eq_ignore_ascii_case(nb))
-}
-
-/// Last byte index of `needle` in `haystack`, ASCII-case-insensitively.
-fn rfind_ci(haystack: &str, needle: &str) -> Option<usize> {
-    let (hb, nb) = (haystack.as_bytes(), needle.as_bytes());
-    if nb.is_empty() || hb.len() < nb.len() {
-        return None;
-    }
-    (0..=hb.len() - nb.len())
-        .rev()
-        .find(|&i| hb[i..i + nb.len()].eq_ignore_ascii_case(nb))
 }
 
 #[cfg(test)]
@@ -800,58 +826,37 @@ mod tests {
     }
 
     #[test]
-    fn extracts_simple_block() {
-        let r = extract_memory_block("blah\n<memory>\nremember this\n</memory>\nbye");
-        assert_eq!(r.as_deref(), Some("remember this"));
-    }
-
-    #[test]
-    fn extraction_is_case_insensitive() {
-        let r = extract_memory_block("<MEMORY>X</Memory>");
-        assert_eq!(r.as_deref(), Some("X"));
-    }
-
-    #[test]
-    fn takes_last_block_when_multiple() {
-        let r = extract_memory_block("<memory>first</memory> mid <memory>second</memory>");
-        assert_eq!(r.as_deref(), Some("second"));
-    }
-
-    #[test]
-    fn no_block_returns_none() {
-        assert_eq!(extract_memory_block("nothing here"), None);
-    }
-
-    #[test]
-    fn empty_block_returns_none() {
-        assert_eq!(extract_memory_block("<memory>   \n  </memory>"), None);
-    }
-
-    #[test]
-    fn handles_non_ascii_before_tag() {
-        // Byte offsets must stay on char boundaries even with multibyte text.
-        let r = extract_memory_block("前言。。。<memory>記住這個</memory>");
-        assert_eq!(r.as_deref(), Some("記住這個"));
-    }
-
-    #[test]
     fn augmented_prompt_includes_memory_and_comments() {
         let p = build_augmented_prompt(
             "do the thing",
             Some("old note"),
             &[comment(3, "be careful"), comment(2, "use bullets")],
+            true,
         );
-        assert!(p.starts_with("do the thing"));
-        assert!(p.contains("ORCHESTRATOR CONTEXT"));
+        assert!(p.starts_with("## Current objective\ndo the thing"));
+        assert!(p.contains("## Your memory"));
         assert!(p.contains("old note"));
+        assert!(p.contains("## User feedback"));
         assert!(p.contains("[run #3"));
         assert!(p.contains("be careful"));
-        assert!(p.contains(MEMORY_OPEN));
+        // Tool mode advertises the MCP memory tools.
+        assert!(p.contains("orchmem_memory_set"));
+        assert!(p.contains("orchmem_memory_append"));
+    }
+
+    #[test]
+    fn augmented_prompt_without_tools_omits_update_section() {
+        // Degenerate case: MCP couldn't be wired in → memory shown read-only,
+        // with no update mechanism (and no legacy <memory> instructions).
+        let p = build_augmented_prompt("do the thing", Some("old note"), &[], false);
+        assert!(p.contains("old note"));
+        assert!(!p.contains("orchmem_"));
+        assert!(!p.contains("Updating your memory"));
     }
 
     #[test]
     fn augmented_prompt_handles_empty_memory_and_no_comments() {
-        let p = build_augmented_prompt("task", None, &[]);
+        let p = build_augmented_prompt("task", None, &[], false);
         assert!(p.contains("(empty — nothing saved yet)"));
         assert!(!p.contains("User feedback"));
     }

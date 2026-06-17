@@ -422,8 +422,8 @@ function MemorySection({ taskId }: { taskId: string }) {
 
   const dirty = content !== (loaded?.content ?? "");
 
-  // A run writes the agent's `<memory>` block to the DB *before* it emits the
-  // `finished` event, so by the time we hear about it the new memory is already
+  // The agent's MCP memory tools write to the DB *during* the run (before the
+  // `finished` event), so by the time we hear about it the new memory is already
   // persisted — just re-fetch. We skip the refresh while the user has unsaved
   // edits (`dirty`) so we never clobber what they're typing; a ref keeps the
   // listener reading the latest dirty state without re-subscribing each render.
