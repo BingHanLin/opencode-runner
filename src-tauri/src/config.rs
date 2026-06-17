@@ -110,6 +110,12 @@ pub struct Settings {
     /// PATH hijacking, so production setups should set this explicitly.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub opencode_binary: Option<PathBuf>,
+    /// Cap on how many finished runs to retain per task. After a run ends, the
+    /// runner prunes that task's older finished runs (plus their logs, events,
+    /// and comments) beyond this count. `None` or `0` means unlimited — keep
+    /// every run forever.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_run_history: Option<u64>,
 }
 
 pub fn tasks_file_path() -> PathBuf {

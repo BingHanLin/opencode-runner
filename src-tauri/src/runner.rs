@@ -146,6 +146,9 @@ pub async fn execute(
     db: &Db,
     registry: &CancelRegistry,
     notifier: Option<RunNotifier>,
+    // Per-task run-history cap from settings. After the run finishes, older
+    // finished runs beyond this many are pruned. None/Some(0) = unlimited.
+    max_history: Option<u64>,
 ) -> Result<i64> {
     let run_id = db.insert_run_start(&task.id)?;
     tracing::info!(task = %task.id, run_id, "starting task");
@@ -391,6 +394,18 @@ pub async fn execute(
         error: final_error,
     });
     registry.lock().unwrap().remove(&run_id);
+
+    // Enforce the run-history retention cap now that this run is recorded.
+    // Best-effort: a prune failure is logged but never changes the outcome.
+    if let Some(keep) = max_history.filter(|k| *k > 0) {
+        match db.prune_finished_runs_for_task(&task.id, keep) {
+            Ok(n) if n > 0 => {
+                tracing::info!(task = %task.id, "pruned {n} old run(s) over retention cap {keep}")
+            }
+            Ok(_) => {}
+            Err(e) => tracing::warn!(task = %task.id, "pruning run history failed: {e:#}"),
+        }
+    }
 
     // Map Err outcome from cli back to a top-level error so callers see it.
     match outcome {

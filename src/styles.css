@@ -559,6 +559,26 @@ a:hover {
 .edit-toolbar {
   margin: 0 calc(var(--page-pad-x) * -1) 14px;
   padding: 14px var(--page-pad-x);
+  /* Stack the button row above any validation/save message so the message is
+     part of the always-pinned bar and never scrolls out of view. */
+  flex-direction: column;
+  align-items: stretch;
+  justify-content: flex-start;
+  gap: 8px;
+}
+
+.edit-toolbar-main {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: var(--space-3);
+}
+
+/* Validation error / save feedback pinned inside the sticky toolbar. */
+.edit-toolbar-status {
+  display: flex;
+  align-items: center;
+  gap: 6px;
 }
 
 .history-list-header {
@@ -629,6 +649,72 @@ a:hover {
   padding: 18px;
   margin-bottom: 14px;
   box-shadow: var(--shadow-sm);
+}
+
+/* =============================================================================
+   Section table-of-contents (Edit + Settings panels)
+   A two-column layout inside a scrolling .panel: content on the left, a sticky
+   list of section links on the right. The links jump to a section and track
+   the one nearest the top as you scroll (see SectionNav.tsx).
+   ========================================================================== */
+
+.toc-layout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 176px;
+  gap: 22px;
+  align-items: start;
+}
+
+.toc-main {
+  min-width: 0;
+}
+
+.toc-nav {
+  position: sticky;
+  /* `top` is set inline per panel so the list clears any sticky toolbar. */
+  align-self: start;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.toc-link {
+  text-align: left;
+  background: transparent;
+  border: none;
+  border-left: 2px solid var(--border);
+  padding: 6px 11px;
+  color: var(--text-muted);
+  font-size: 12.5px;
+  font-weight: 500;
+  cursor: pointer;
+  border-radius: 0 var(--radius-xs) var(--radius-xs) 0;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  transition:
+    color var(--duration-fast) var(--ease),
+    background-color var(--duration-fast) var(--ease),
+    border-color var(--duration-fast) var(--ease);
+}
+.toc-link:hover {
+  color: var(--text);
+  background: var(--surface-2);
+}
+.toc-link.active {
+  color: var(--accent-text);
+  border-left-color: var(--accent);
+  background: var(--accent-bg);
+}
+
+/* Collapse the side nav when the panel gets too narrow to spare a column. */
+@media (max-width: 960px) {
+  .toc-layout {
+    grid-template-columns: 1fr;
+  }
+  .toc-nav {
+    display: none;
+  }
 }
 
 .section-title {

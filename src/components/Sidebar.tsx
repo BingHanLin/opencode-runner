@@ -11,6 +11,8 @@ interface Props {
   runningTaskIds: Set<string>;
   /** Task ids with unsaved edits, flagged with a marker in the list. */
   dirtyTaskIds: Set<string>;
+  /** The unsaved, never-persisted new task (if any), flagged as a draft. */
+  newTaskId: string | null;
   onSelect: (id: string) => void;
   onNew: () => void;
   onSettings: () => void;
@@ -24,6 +26,7 @@ export function Sidebar({
   view,
   runningTaskIds,
   dirtyTaskIds,
+  newTaskId,
   onSelect,
   onNew,
   onSettings,
@@ -181,7 +184,7 @@ export function Sidebar({
               }}
             >
               <div className="task-name">
-                {dirtyTaskIds.has(t.id) && (
+                {dirtyTaskIds.has(t.id) && t.id !== newTaskId && (
                   <span
                     className="unsaved-dot"
                     title={tr("sidebar.unsaved")}
@@ -189,6 +192,11 @@ export function Sidebar({
                   />
                 )}
                 <span>{t.name || tr("sidebar.unnamed")}</span>
+                {t.id === newTaskId && (
+                  <span className="chip accent" title={tr("sidebar.draftTitle")}>
+                    {tr("sidebar.draft")}
+                  </span>
+                )}
                 {runningTaskIds.has(t.id) && (
                   <span className="chip info">
                     <span className="pulse" />

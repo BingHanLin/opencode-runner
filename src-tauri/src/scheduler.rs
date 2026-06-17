@@ -15,6 +15,9 @@ pub struct Scheduler {
     db: Db,
     registry: CancelRegistry,
     notifier: Option<RunNotifier>,
+    /// Per-task run-history cap, forwarded to every scheduled `runner::execute`
+    /// so cron/once runs prune old history the same way "Run now" does.
+    max_history: Option<u64>,
 }
 
 impl Scheduler {
@@ -23,6 +26,7 @@ impl Scheduler {
         db: Db,
         registry: CancelRegistry,
         notifier: Option<RunNotifier>,
+        max_history: Option<u64>,
     ) -> Result<Self> {
         let sched = JobScheduler::new().await.context("JobScheduler::new")?;
         sched.start().await.context("JobScheduler::start")?;
@@ -32,6 +36,7 @@ impl Scheduler {
             db,
             registry,
             notifier,
+            max_history,
         })
     }
 
@@ -51,6 +56,7 @@ impl Scheduler {
         let db = self.db.clone();
         let registry = self.registry.clone();
         let notifier = self.notifier.clone();
+        let max_history = self.max_history;
 
         match schedule {
             Schedule::Cron(expr) => {
@@ -71,7 +77,9 @@ impl Scheduler {
                         let registry = registry.clone();
                         let notifier = notifier.clone();
                         Box::pin(async move {
-                            let _ = runner::execute(&task, &cli, &db, &registry, notifier).await;
+                            let _ =
+                                runner::execute(&task, &cli, &db, &registry, notifier, max_history)
+                                    .await;
                         })
                     },
                 )
@@ -92,7 +100,7 @@ impl Scheduler {
                 let notifier = notifier.clone();
                 tokio::spawn(async move {
                     tokio::time::sleep(delay).await;
-                    let _ = runner::execute(&task, &cli, &db, &registry, notifier).await;
+                    let _ = runner::execute(&task, &cli, &db, &registry, notifier, max_history).await;
                 });
             }
             Schedule::Manual => {

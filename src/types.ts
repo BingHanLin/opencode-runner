@@ -38,6 +38,9 @@ export interface RunComment {
 
 export interface Settings {
   opencode_binary: string | null;
+  /** Max finished runs to retain per task; null or 0 = unlimited. Older runs
+   * are pruned after each run finishes. */
+  max_run_history: number | null;
 }
 
 export interface TasksFile {

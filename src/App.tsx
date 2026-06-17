@@ -150,6 +150,27 @@ export default function App() {
     setTab("edit");
   }
 
+  // Clone the currently shown task (including any unsaved edits) into a fresh,
+  // unsaved draft with a new id. It opens in the editor as a pending new task —
+  // nothing is written until the user saves. Memory/run history are per-task in
+  // the db and intentionally not carried over. The schedule is disabled so a
+  // duplicated cron task can't silently start firing alongside the original.
+  function duplicateTask() {
+    const base = activeDraft;
+    if (!base) return;
+    const copy: Task = {
+      ...structuredClone(base),
+      id: crypto.randomUUID(),
+      name: t("edit.nameCopySuffix", { name: base.name || t("sidebar.unnamed") }),
+      enabled: false,
+    };
+    setNewDraft(copy);
+    setActiveId(copy.id);
+    setView("task");
+    setTab("edit");
+    flash(setStatus, t("app.flash.duplicated"));
+  }
+
   function openSettings() {
     setView("settings");
     setActiveId(null);
@@ -251,6 +272,7 @@ export default function App() {
         view={view === "task" ? "task" : view === "settings" ? "settings" : "empty"}
         runningTaskIds={runningTaskIds}
         dirtyTaskIds={dirtyIds}
+        newTaskId={newDraft?.id ?? null}
         onSelect={selectTask}
         onNew={newTask}
         onSettings={openSettings}
@@ -291,6 +313,7 @@ export default function App() {
                 onSave={saveTask}
                 onDelete={deleteTask}
                 onRunNow={runActive}
+                onDuplicate={duplicateTask}
               />
             ) : (
               <HistoryTab task={active} events={events} />

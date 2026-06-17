@@ -12,12 +12,14 @@ import type { Model, Task, TaskMemory } from "../types";
 import { parseScheduleKind } from "../types";
 import {
   AlertIcon,
+  CopyIcon,
   FolderIcon,
   PlayIcon,
   SaveIcon,
   TrashIcon,
 } from "./Icon";
 import { ScheduleEditor } from "./ScheduleEditor";
+import { SectionNav, type SectionNavItem } from "./SectionNav";
 
 interface Props {
   task: Task;
@@ -29,6 +31,7 @@ interface Props {
   onSave: (updated: Task) => Promise<void>;
   onDelete: () => Promise<void>;
   onRunNow: () => Promise<void>;
+  onDuplicate: () => void;
 }
 
 export function EditTab({
@@ -40,12 +43,38 @@ export function EditTab({
   onSave,
   onDelete,
   onRunNow,
+  onDuplicate,
 }: Props) {
   const t = useT();
   const [models, setModels] = useState<Model[]>([]);
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+  const toolbarRef = useRef<HTMLDivElement>(null);
+  // The sticky toolbar grows when a validation/save message appears, so the
+  // section nav (and click-scroll offset) tracks its live height instead of a
+  // guessed constant — otherwise the nav would slip behind the taller bar.
+  const [toolbarH, setToolbarH] = useState(58);
+  useEffect(() => {
+    const el = toolbarRef.current;
+    if (!el || typeof ResizeObserver === "undefined") return;
+    const ro = new ResizeObserver(() => setToolbarH(el.offsetHeight));
+    ro.observe(el);
+    setToolbarH(el.offsetHeight);
+    return () => ro.disconnect();
+  }, []);
+
+  const navItems: SectionNavItem[] = useMemo(
+    () => [
+      { id: "edit-basics", label: t("edit.section.basics") },
+      { id: "edit-schedule", label: t("edit.section.schedule") },
+      { id: "edit-execution", label: t("edit.section.execution") },
+      { id: "edit-prompt", label: t("edit.section.prompt") },
+      { id: "edit-memory", label: t("edit.section.memory") },
+    ],
+    [t],
+  );
 
   useEffect(() => {
     setConfirmDelete(false);
@@ -87,8 +116,9 @@ export function EditTab({
   }
 
   return (
-    <div className="panel">
-      <div className="sticky-bar edit-toolbar">
+    <div className="panel" ref={panelRef}>
+      <div className="sticky-bar edit-toolbar" ref={toolbarRef}>
+        <div className="edit-toolbar-main">
         <div className="row" style={{ gap: 8 }}>
           <button
             className="btn primary"
@@ -108,9 +138,27 @@ export function EditTab({
             <PlayIcon size={13} />
             {t("edit.runNow")}
           </button>
+          <button
+            className="btn"
+            disabled={isNew || busy}
+            onClick={onDuplicate}
+            title={t("edit.duplicate")}
+          >
+            <CopyIcon size={13} />
+            {t("edit.duplicate")}
+          </button>
         </div>
         <div className="row" style={{ gap: 8 }}>
-          {confirmDelete ? (
+          {isNew ? (
+            // An unsaved new task isn't on disk yet, so there's nothing to
+            // "delete" — this just throws the draft away (handled by onDelete's
+            // new-task branch). One click, no confirm: it's the natural "cancel
+            // creating this task" action.
+            <button className="btn danger" onClick={onDelete}>
+              <TrashIcon size={13} />
+              {t("edit.discard")}
+            </button>
+          ) : confirmDelete ? (
             <>
               <span className="warn-text">{t("edit.confirmDeleteQ")}</span>
               <button className="btn danger" onClick={onDelete}>
@@ -126,7 +174,6 @@ export function EditTab({
           ) : (
             <button
               className="btn danger"
-              disabled={isNew}
               onClick={() => setConfirmDelete(true)}
             >
               <TrashIcon size={13} />
@@ -134,12 +181,19 @@ export function EditTab({
             </button>
           )}
         </div>
+        </div>
+        {validation && (
+          <div className="edit-toolbar-status error-text">
+            <AlertIcon size={13} />
+            {t(validation)}
+          </div>
+        )}
+        {message && <div className="edit-toolbar-status help">{message}</div>}
       </div>
 
-      {validation && <div className="error-text">{t(validation)}</div>}
-      {message && <div className="help">{message}</div>}
-
-      <section className="section">
+      <div className="toc-layout">
+        <div className="toc-main">
+      <section className="section" id="edit-basics">
         <div className="section-title">{t("edit.section.basics")}</div>
         <div className="field">
           <label className="field-label">{t("edit.name")}</label>
@@ -158,7 +212,7 @@ export function EditTab({
         </div>
       </section>
 
-      <section className="section">
+      <section className="section" id="edit-schedule">
         <div className="section-title">{t("edit.section.schedule")}</div>
         <ScheduleEditor
           schedule={draft.schedule}
@@ -176,7 +230,7 @@ export function EditTab({
         )}
       </section>
 
-      <section className="section">
+      <section className="section" id="edit-execution">
         <div className="section-title">{t("edit.section.execution")}</div>
         <div className="field">
           <label className="field-label">{t("edit.workingDir")}</label>
@@ -304,7 +358,7 @@ export function EditTab({
         )}
       </section>
 
-      <section className="section">
+      <section className="section" id="edit-prompt">
         <div className="section-title">{t("edit.section.prompt")}</div>
         <textarea
           className="textarea"
@@ -320,7 +374,7 @@ export function EditTab({
         </div>
       </section>
 
-      <section className="section">
+      <section className="section" id="edit-memory">
         <div className="section-title">{t("edit.section.memory")}</div>
         <label className="checkbox">
           <input
@@ -335,6 +389,13 @@ export function EditTab({
         </div>
         {draft.memory_enabled && !isNew && <MemorySection taskId={task.id} />}
       </section>
+        </div>
+        <SectionNav
+          items={navItems}
+          containerRef={panelRef}
+          topOffset={toolbarH + 12}
+        />
+      </div>
     </div>
   );
 }

@@ -1,9 +1,10 @@
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { api, pickFile } from "../api";
 import { useLang, useT } from "../LanguageProvider";
 import { LANGS, type Lang } from "../i18n";
 import type { BinaryStatus, Settings, StoragePaths } from "../types";
 import { FolderIcon } from "./Icon";
+import { SectionNav, type SectionNavItem } from "./SectionNav";
 
 interface Props {
   settings: Settings;
@@ -18,6 +19,17 @@ export function SettingsPanel({ settings, onSave }: Props) {
   const [paths, setPaths] = useState<StoragePaths | null>(null);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const panelRef = useRef<HTMLDivElement>(null);
+
+  const navItems: SectionNavItem[] = useMemo(
+    () => [
+      { id: "set-language", label: t("settings.language.section") },
+      { id: "set-binary", label: t("settings.binary.section") },
+      { id: "set-history", label: t("settings.history.section") },
+      { id: "set-storage", label: t("settings.storage.section") },
+    ],
+    [t],
+  );
 
   useEffect(() => setDraft(settings), [settings]);
 
@@ -30,7 +42,9 @@ export function SettingsPanel({ settings, onSave }: Props) {
     api.storagePaths().then(setPaths).catch(() => setPaths(null));
   }, []);
 
-  const dirty = draft.opencode_binary !== settings.opencode_binary;
+  const dirty =
+    (draft.opencode_binary ?? null) !== (settings.opencode_binary ?? null) ||
+    (draft.max_run_history ?? null) !== (settings.max_run_history ?? null);
 
   async function browse() {
     const p = await pickFile();
@@ -53,12 +67,14 @@ export function SettingsPanel({ settings, onSave }: Props) {
   }
 
   return (
-    <div className="panel panel-pad-top">
+    <div className="panel panel-pad-top" ref={panelRef}>
       <h2 className="content-title" style={{ marginBottom: 12 }}>
         {t("settings.title")}
       </h2>
 
-      <section className="section">
+      <div className="toc-layout">
+        <div className="toc-main">
+      <section className="section" id="set-language">
         <div className="section-title">{t("settings.language.section")}</div>
         <div className="field">
           <label className="field-label">{t("settings.language.label")}</label>
@@ -80,7 +96,7 @@ export function SettingsPanel({ settings, onSave }: Props) {
         </div>
       </section>
 
-      <section className="section">
+      <section className="section" id="set-binary">
         <div className="section-title">{t("settings.binary.section")}</div>
         <div className="field">
           <label className="field-label">
@@ -115,34 +131,52 @@ export function SettingsPanel({ settings, onSave }: Props) {
             {t("settings.binary.resolved", { path: status.resolved_path })}
           </div>
         )}
-
-        <div
-          className="row"
-          style={{ marginTop: 14, justifyContent: "flex-end", gap: 8 }}
-        >
-          <button
-            className="btn"
-            disabled={!dirty || busy}
-            onClick={() => setDraft(settings)}
-          >
-            {t("btn.revert")}
-          </button>
-          <button
-            className="btn primary"
-            disabled={!dirty || busy}
-            onClick={save}
-          >
-            {busy ? t("btn.saving") : t("btn.save")}
-          </button>
-        </div>
-        {message && (
-          <div className="help" style={{ marginTop: 8 }}>
-            {message}
-          </div>
-        )}
       </section>
 
-      <section className="section">
+      <section className="section" id="set-history">
+        <div className="section-title">{t("settings.history.section")}</div>
+        <div className="field">
+          <label className="field-label">{t("settings.history.label")}</label>
+          <input
+            type="number"
+            min={0}
+            step={1}
+            className="input"
+            style={{ maxWidth: 160 }}
+            value={draft.max_run_history ?? ""}
+            placeholder={t("settings.history.placeholder")}
+            onChange={(e) => {
+              const v = e.target.value;
+              if (v === "") return setDraft({ ...draft, max_run_history: null });
+              const n = Math.max(0, Math.floor(Number(v)));
+              setDraft({ ...draft, max_run_history: Number.isFinite(n) ? n : null });
+            }}
+          />
+          <div className="help" style={{ marginTop: 8 }}>
+            {t("settings.history.help")}
+          </div>
+        </div>
+      </section>
+
+      <div className="row" style={{ justifyContent: "flex-end", gap: 8 }}>
+        <button
+          className="btn"
+          disabled={!dirty || busy}
+          onClick={() => setDraft(settings)}
+        >
+          {t("btn.revert")}
+        </button>
+        <button className="btn primary" disabled={!dirty || busy} onClick={save}>
+          {busy ? t("btn.saving") : t("btn.save")}
+        </button>
+      </div>
+      {message && (
+        <div className="help" style={{ marginTop: 8, textAlign: "right" }}>
+          {message}
+        </div>
+      )}
+
+      <section className="section" id="set-storage" style={{ marginTop: 14 }}>
         <div className="section-title">{t("settings.storage.section")}</div>
         {paths ? (
           <div className="storage-paths">
@@ -171,6 +205,9 @@ export function SettingsPanel({ settings, onSave }: Props) {
           <div className="help">{t("settings.storage.loading")}</div>
         )}
       </section>
+        </div>
+        <SectionNav items={navItems} containerRef={panelRef} topOffset={16} />
+      </div>
     </div>
   );
 }

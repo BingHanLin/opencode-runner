@@ -231,6 +231,7 @@ pub async fn run_now(
     task_id: String,
 ) -> Result<(), String> {
     let file = config::load(&state.config_path).map_err(s)?;
+    let max_history = file.settings.max_run_history;
     let task = file
         .tasks
         .into_iter()
@@ -243,7 +244,7 @@ pub async fn run_now(
     let notifier = Some(make_notifier(app.clone()));
 
     tokio::spawn(async move {
-        let _ = runner::execute(&task, &cli, &db, &registry, notifier).await;
+        let _ = runner::execute(&task, &cli, &db, &registry, notifier, max_history).await;
     });
     Ok(())
 }
@@ -275,9 +276,15 @@ pub async fn restart_scheduler(
     if let Some(old) = guard.take() {
         old.shutdown().await;
     }
-    let new = Scheduler::new(cli, state.db.clone(), state.registry.clone(), notifier)
-        .await
-        .map_err(s)?;
+    let new = Scheduler::new(
+        cli,
+        state.db.clone(),
+        state.registry.clone(),
+        notifier,
+        file.settings.max_run_history,
+    )
+    .await
+    .map_err(s)?;
     for task in file.tasks {
         new.register(task).await.map_err(s)?;
     }

@@ -68,6 +68,7 @@ const en = {
   "app.flash.savedRestarted": "Saved & scheduler restarted",
   "app.flash.deleted": "Deleted",
   "app.flash.reordered": "Reordered",
+  "app.flash.duplicated": "Duplicated — review and save to create the copy",
 
   // ---- Update banner ----
   "update.available": "Version {version} is available.",
@@ -88,6 +89,8 @@ const en = {
   "sidebar.unnamed": "(unnamed)",
   "sidebar.running": "running",
   "sidebar.unsaved": "Unsaved changes",
+  "sidebar.draft": "draft",
+  "sidebar.draftTitle": "Unsaved new task — save it to keep it",
   "sidebar.disabled": "disabled",
   "sidebar.settings": "Settings",
 
@@ -102,6 +105,12 @@ const en = {
   "settings.language.section": "Language",
   "settings.language.label": "Interface language",
   "settings.language.help": "Applies immediately and is remembered on this machine.",
+  "settings.history.section": "Run history",
+  "settings.history.label": "Max runs to keep per task",
+  "settings.history.placeholder": "unlimited",
+  "settings.history.help":
+    "After each run, older finished runs beyond this count (and their logs, events, and comments) are deleted. Leave empty or 0 to keep every run.",
+  "settings.nav": "On this page",
   "settings.storage.section": "Storage",
   "settings.storage.loading": "Loading paths…",
   "settings.storage.config.label": "Task config",
@@ -131,9 +140,13 @@ const en = {
 
   // ---- Edit tab ----
   "edit.runNow": "Run now",
+  "edit.duplicate": "Duplicate",
+  "edit.nav": "On this page",
+  "edit.nameCopySuffix": "{name} (copy)",
   "edit.confirmDeleteQ": "Delete this task?",
   "edit.confirmDelete": "Confirm delete",
   "edit.delete": "Delete",
+  "edit.discard": "Discard",
   "edit.savedRestarted": "Saved. Scheduler restarted.",
   "edit.section.basics": "Basics",
   "edit.name": "Name",
@@ -313,6 +326,7 @@ const zhTW: Record<MessageKey, string> = {
   "app.flash.savedRestarted": "已儲存，排程器已重啟",
   "app.flash.deleted": "已刪除",
   "app.flash.reordered": "已重新排序",
+  "app.flash.duplicated": "已複製——請檢視後儲存以建立副本",
 
   // ---- Update banner ----
   "update.available": "有新版本 {version} 可用。",
@@ -333,6 +347,8 @@ const zhTW: Record<MessageKey, string> = {
   "sidebar.unnamed": "（未命名）",
   "sidebar.running": "執行中",
   "sidebar.unsaved": "有未儲存的修改",
+  "sidebar.draft": "草稿",
+  "sidebar.draftTitle": "尚未儲存的新任務——儲存後才會保留",
   "sidebar.disabled": "已停用",
   "sidebar.settings": "設定",
 
@@ -347,6 +363,12 @@ const zhTW: Record<MessageKey, string> = {
   "settings.language.section": "語言",
   "settings.language.label": "介面語言",
   "settings.language.help": "立即套用，並記住於此電腦。",
+  "settings.history.section": "執行歷史保留",
+  "settings.history.label": "每個任務最多保留的執行數",
+  "settings.history.placeholder": "不限制",
+  "settings.history.help":
+    "每次執行後，超過此數量的較舊已結束執行紀錄（連同其日誌、事件與留言）會被刪除。留空或填 0 表示保留所有執行。",
+  "settings.nav": "本頁目錄",
   "settings.storage.section": "儲存位置",
   "settings.storage.loading": "載入路徑中…",
   "settings.storage.config.label": "任務設定檔",
@@ -376,9 +398,13 @@ const zhTW: Record<MessageKey, string> = {
 
   // ---- Edit tab ----
   "edit.runNow": "立即執行",
+  "edit.duplicate": "複製任務",
+  "edit.nav": "本頁目錄",
+  "edit.nameCopySuffix": "{name}（副本）",
   "edit.confirmDeleteQ": "確定刪除此任務？",
   "edit.confirmDelete": "確認刪除",
   "edit.delete": "刪除",
+  "edit.discard": "捨棄",
   "edit.savedRestarted": "已儲存，排程器已重啟。",
   "edit.section.basics": "基本資料",
   "edit.name": "名稱",

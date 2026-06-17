@@ -103,14 +103,17 @@ pub fn run() {
             let registry = new_cancel_registry();
 
             // Boot scheduler with tasks already on disk.
-            let cli = {
+            let (cli, max_history) = {
                 let file = config::load(&config_path).unwrap_or_default();
-                Cli::resolve(file.settings.opencode_binary.as_deref()).0
+                (
+                    Cli::resolve(file.settings.opencode_binary.as_deref()).0,
+                    file.settings.max_run_history,
+                )
             };
             let handle = app.handle().clone();
             let notifier = Some(make_notifier(handle.clone()));
             let scheduler = tauri::async_runtime::block_on(async {
-                let s = Scheduler::new(cli, db.clone(), registry.clone(), notifier)
+                let s = Scheduler::new(cli, db.clone(), registry.clone(), notifier, max_history)
                     .await
                     .expect("Scheduler::new");
                 if let Ok(file) = config::load(&config_path) {

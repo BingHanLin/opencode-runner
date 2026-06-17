@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
-use rusqlite::{params, params_from_iter, Connection, OptionalExtension};
+use rusqlite::{params, params_from_iter, Connection, OptionalExtension, Transaction};
 use serde::Serialize;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
@@ -363,37 +363,45 @@ impl Db {
             tx.commit()?;
             return Ok(0);
         }
-        // rusqlite doesn't bind a Vec directly to an IN clause; expand the
-        // placeholders ourselves and pass the ids via `params_from_iter`.
-        // Safe because `ids` come from our own query, not user input.
-        let mut placeholders = String::with_capacity(ids.len() * 2);
-        for i in 0..ids.len() {
-            if i > 0 {
-                placeholders.push(',');
-            }
-            placeholders.push('?');
-        }
-        tx.execute(
-            &format!("DELETE FROM run_logs     WHERE run_id IN ({placeholders})"),
-            params_from_iter(ids.iter()),
-        )?;
-        tx.execute(
-            &format!("DELETE FROM run_events   WHERE run_id IN ({placeholders})"),
-            params_from_iter(ids.iter()),
-        )?;
-        // Comments belong to a run; clearing the run clears its feedback too,
-        // so a "fresh start" doesn't keep injecting comments tied to runs the
-        // user can no longer see. task_memory is intentionally left untouched.
-        tx.execute(
-            &format!("DELETE FROM run_comments WHERE run_id IN ({placeholders})"),
-            params_from_iter(ids.iter()),
-        )?;
-        let removed = tx.execute(
-            &format!("DELETE FROM runs       WHERE id     IN ({placeholders})"),
-            params_from_iter(ids.iter()),
-        )?;
+        let removed = delete_runs_and_children(&tx, &ids)?;
         tx.commit()?;
-        Ok(removed as u64)
+        Ok(removed)
+    }
+
+    /// Retention prune: keep only the most recent `keep` finished runs for a
+    /// task, deleting older finished runs (plus their logs, events, and
+    /// comments). In-flight runs (`status == 'running'`) are never counted or
+    /// touched, so a running job can't be pruned out from under the runner.
+    /// `keep == 0` means unlimited and is a no-op. Returns the number of runs
+    /// removed. Called after each run finishes when `max_run_history` is set.
+    pub fn prune_finished_runs_for_task(&self, task_id: &str, keep: u64) -> Result<u64> {
+        if keep == 0 {
+            return Ok(0);
+        }
+        let mut conn = self.inner.lock().unwrap();
+        let tx = conn.transaction()?;
+        let ids: Vec<i64> = {
+            // `LIMIT -1 OFFSET ?` skips the `keep` newest finished runs and
+            // returns everything older, which is exactly what we delete.
+            let mut stmt = tx.prepare(
+                "SELECT id FROM runs
+                  WHERE task_id = ?1 AND status != 'running'
+                  ORDER BY id DESC LIMIT -1 OFFSET ?2",
+            )?;
+            let rows = stmt.query_map(params![task_id, keep as i64], |r| r.get::<_, i64>(0))?;
+            let mut out = Vec::new();
+            for r in rows {
+                out.push(r?);
+            }
+            out
+        };
+        if ids.is_empty() {
+            tx.commit()?;
+            return Ok(0);
+        }
+        let removed = delete_runs_and_children(&tx, &ids)?;
+        tx.commit()?;
+        Ok(removed)
     }
 
     #[allow(dead_code)]
@@ -499,6 +507,44 @@ impl Db {
         conn.execute("DELETE FROM run_comments WHERE id = ?1", params![id])?;
         Ok(())
     }
+}
+
+/// Delete the given runs and all of their dependent rows (logs, events,
+/// comments) within an open transaction. Shared by the per-task "clear
+/// history" action and the retention prune. `task_memory` is intentionally
+/// left untouched — it's keyed by task, not run, and outlives any single run.
+///
+/// rusqlite doesn't bind a `Vec` directly to an `IN` clause, so we expand the
+/// placeholders ourselves. Safe because `ids` always come from our own queries,
+/// never user input.
+fn delete_runs_and_children(tx: &Transaction<'_>, ids: &[i64]) -> Result<u64> {
+    if ids.is_empty() {
+        return Ok(0);
+    }
+    let mut placeholders = String::with_capacity(ids.len() * 2);
+    for i in 0..ids.len() {
+        if i > 0 {
+            placeholders.push(',');
+        }
+        placeholders.push('?');
+    }
+    tx.execute(
+        &format!("DELETE FROM run_logs     WHERE run_id IN ({placeholders})"),
+        params_from_iter(ids.iter()),
+    )?;
+    tx.execute(
+        &format!("DELETE FROM run_events   WHERE run_id IN ({placeholders})"),
+        params_from_iter(ids.iter()),
+    )?;
+    tx.execute(
+        &format!("DELETE FROM run_comments WHERE run_id IN ({placeholders})"),
+        params_from_iter(ids.iter()),
+    )?;
+    let removed = tx.execute(
+        &format!("DELETE FROM runs         WHERE id     IN ({placeholders})"),
+        params_from_iter(ids.iter()),
+    )?;
+    Ok(removed as u64)
 }
 
 fn row_to_run(row: &rusqlite::Row<'_>) -> rusqlite::Result<Run> {
