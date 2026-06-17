@@ -1,6 +1,6 @@
 [package]
 name = "opencode_orchestrator"
-version = "0.5.2"
+version = "0.6.0"
 edition = "2021"
 description = "Schedule and run opencode tasks, browse their conversation history. (Tauri 2 / React port)"
 
