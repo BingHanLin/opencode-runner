@@ -1,34 +1,35 @@
-# 複製成 tasks.toml 後編輯。每個 [[task]] 區塊定義一個排程任務。
+# Copy this to tasks.toml and edit. Each [[task]] block defines one scheduled task.
 #
-# 排程格式（schedule）：
-#   cron:<Quartz cron 表達式>   非傳統 Unix 5 欄位！是 Quartz 6 欄位：
-#                                  秒 分 時 日 月 週幾  （可選第 7 欄：年）
-#                              day-of-month 與 day-of-week 不能兩個都指定具體值，
-#                              閒置的那個請用 `?`。
-#                              範例：
-#                                "cron:0 0 9 ? * MON-FRI"   週一到五 09:00:00
-#                                "cron:0 */15 * ? * *"      每 15 分鐘
-#                                "cron:0 0 0 1 * ?"         每月 1 號午夜
-#   once:<RFC3339 時間>          例如 "once:2026-05-28T09:00:00Z"
-#   manual                       只能用 GUI 的 Run now 觸發
+# Schedule formats (`schedule`):
+#   cron:<Quartz cron expression>   NOT the traditional Unix 5-field syntax! This is
+#                                   Quartz 6-field: second minute hour day-of-month
+#                                   month day-of-week  (optional 7th field: year).
+#                                   day-of-month and day-of-week cannot both be
+#                                   specific; set the unused one to `?`.
+#                                   Examples:
+#                                     "cron:0 0 9 ? * MON-FRI"   weekdays at 09:00:00
+#                                     "cron:0 */15 * ? * *"      every 15 minutes
+#                                     "cron:0 0 0 1 * ?"         midnight on the 1st
+#   once:<RFC3339 timestamp>        e.g. "once:2026-05-28T09:00:00Z"
+#   manual                          fires only via the GUI's "Run now"
 
 [[task]]
 id = "daily-codereview"
-name = "每日 code review"
+name = "Daily code review"
 schedule = "cron:0 0 9 ? * MON-FRI"
 working_dir = "D:/projects/foo"
-# model = "anthropic/claude-sonnet-4-6"   # 留空交給 opencode 預設（會用你 opencode config 的設定）
+# model = "anthropic/claude-sonnet-4-6"   # blank → opencode's default (uses your opencode config)
 prompt = """
-檢查 working_dir 的 `git diff HEAD~1`，
-找出潛在問題並以 bullet point 列出修補建議。
+Review `git diff HEAD~1` in the working directory,
+identify potential issues, and list suggested fixes as bullet points.
 """
 dangerously_skip_permissions = true
 enabled = true
 
 [[task]]
 id = "test-once"
-name = "一次性測試任務"
+name = "One-shot test task"
 schedule = "manual"
 working_dir = "D:/shonCloud/opencdoe_orchestrator"
-prompt = "你好，請回應一句話確認你能執行。"
+prompt = "Hello — please reply with a single sentence to confirm you can run."
 enabled = true
