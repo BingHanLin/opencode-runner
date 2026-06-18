@@ -63,6 +63,9 @@ export interface Run {
   /** The exact prompt sent to opencode (incl. injected memory/comments), or
    * null for runs recorded before this was captured. */
   prompt: string | null;
+  /** The agent's own summary of the run, written via the scoped MCP summary
+   * tools, or null if it never wrote one. */
+  summary: string | null;
 }
 
 export interface RunEvent {

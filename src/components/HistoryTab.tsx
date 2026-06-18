@@ -5,6 +5,8 @@ import {
   useState,
   type UIEvent,
 } from "react";
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { api } from "../api";
 import { useT } from "../LanguageProvider";
 import type {
@@ -346,18 +348,21 @@ function RunDetails({
   const t = useT();
   const stall = stallInfo(run, now);
 
-  // Inner tabs split the run log (steps/output/conversation) from per-run
-  // comments so feedback has its own space. Reset to the log tab and reload
-  // comments whenever the selected run changes.
-  const [detailTab, setDetailTab] = useState<"log" | "comments">("log");
+  // Inner tabs split the agent's summary, the run log (steps/output/
+  // conversation), and per-run comments so each has its own space. When the
+  // run changes, open the Summary tab if one was written (it's the headline),
+  // otherwise fall back to the log. Reload comments on every run change.
+  const [detailTab, setDetailTab] = useState<"summary" | "log" | "comments">(
+    "log",
+  );
   const [comments, setComments] = useState<RunComment[]>([]);
   useEffect(() => {
-    setDetailTab("log");
+    setDetailTab(run.summary ? "summary" : "log");
     api
       .listCommentsForRun(run.id)
       .then(setComments)
       .catch(() => setComments([]));
-  }, [run.id]);
+  }, [run.id, run.summary]);
 
   async function addComment(text: string) {
     const c = await api.addComment(task.id, run.id, text);
@@ -395,6 +400,12 @@ function RunDetails({
 
       <div className="tabs detail-tabs">
         <button
+          className={`tab ${detailTab === "summary" ? "active" : ""}`}
+          onClick={() => setDetailTab("summary")}
+        >
+          {t("hist.tab.summary")}
+        </button>
+        <button
           className={`tab ${detailTab === "log" ? "active" : ""}`}
           onClick={() => setDetailTab("log")}
         >
@@ -409,7 +420,9 @@ function RunDetails({
         </button>
       </div>
 
-      {detailTab === "comments" ? (
+      {detailTab === "summary" ? (
+        <SummarySection summary={run.summary} running={run.status === "running"} />
+      ) : detailTab === "comments" ? (
         <CommentsSection
           comments={comments}
           onAdd={addComment}
@@ -557,6 +570,49 @@ function PromptSection({ prompt }: { prompt: string | null }) {
       </button>
       {expanded && <pre className="logs-box mono">{prompt}</pre>}
     </section>
+  );
+}
+
+// ============================================================================
+//                          Summary (agent-written, read-only)
+// ============================================================================
+
+// The agent's own summary of the run, written mid/end-run via the scoped MCP
+// `orchmem_summary_*` tools. Read-only here — the UI never edits it. Rendered
+// as Markdown so reports the agent formats (headings, lists, tables, code)
+// display properly.
+function SummarySection({
+  summary,
+  running,
+}: {
+  summary: string | null;
+  running: boolean;
+}) {
+  const t = useT();
+  if (!summary) {
+    return (
+      <section className="section">
+        <div className="help">
+          {running ? t("hist.summary.waiting") : t("hist.summary.empty")}
+        </div>
+      </section>
+    );
+  }
+  return (
+    <section className="section">
+      <Markdown text={summary} />
+    </section>
+  );
+}
+
+// Minimal Markdown renderer. react-markdown emits React elements (no raw HTML
+// is rendered by default), so agent-authored text can't inject markup. GFM
+// adds tables, strikethrough, task lists, and autolinks.
+function Markdown({ text }: { text: string }) {
+  return (
+    <div className="markdown-body">
+      <ReactMarkdown remarkPlugins={[remarkGfm]}>{text}</ReactMarkdown>
+    </div>
   );
 }
 

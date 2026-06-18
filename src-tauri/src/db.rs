@@ -24,6 +24,11 @@ pub struct Run {
     /// comment context injected by the runner. `None` for runs created before
     /// this was recorded. Surfaced read-only in the History tab.
     pub prompt: Option<String>,
+    /// The agent's own summary of this run — what it did and how it turned out.
+    /// Written mid/end-run via the scoped MCP `orchmem_summary_*` tools (see
+    /// `crate::mcp_memory`). `None` until the agent writes one (or for runs that
+    /// predate the feature). Surfaced in the History tab.
+    pub summary: Option<String>,
 }
 
 /// One phase of a run — e.g. "Worktree: git fetch --all" or "Run opencode".
@@ -163,6 +168,16 @@ impl Db {
             conn.execute("ALTER TABLE runs ADD COLUMN prompt TEXT", [])?;
         }
 
+        // Migration: `summary` holds the agent's own end-of-run summary, written
+        // via the scoped MCP summary tools. Older DBs lack the column; add it so
+        // pre-feature runs stay NULL and the UI just hides the section for them.
+        let has_summary: bool = conn
+            .prepare("SELECT 1 FROM pragma_table_info('runs') WHERE name = 'summary'")?
+            .exists([])?;
+        if !has_summary {
+            conn.execute("ALTER TABLE runs ADD COLUMN summary TEXT", [])?;
+        }
+
         Ok(Self {
             inner: Arc::new(Mutex::new(conn)),
             path: path.to_path_buf(),
@@ -246,6 +261,54 @@ impl Db {
         Ok(())
     }
 
+    // ---------- per-run summary (agent-written, via MCP) ----------
+
+    /// Read this run's agent-written summary, if any. Returns `None` when no
+    /// summary has been written (or it's only whitespace).
+    pub fn get_run_summary(&self, run_id: i64) -> Result<Option<String>> {
+        let conn = self.inner.lock().unwrap();
+        let mut stmt = conn.prepare("SELECT summary FROM runs WHERE id = ?1")?;
+        let row: Option<Option<String>> = stmt
+            .query_row(params![run_id], |r| r.get(0))
+            .optional()?;
+        Ok(row.flatten().filter(|s| !s.trim().is_empty()))
+    }
+
+    /// Replace this run's summary wholesale. An empty (post-trim) string clears
+    /// it (stores NULL), so `get_run_summary` reports `None`.
+    pub fn set_run_summary(&self, run_id: i64, summary: &str) -> Result<()> {
+        let conn = self.inner.lock().unwrap();
+        let trimmed = summary.trim();
+        let value: Option<&str> = if trimmed.is_empty() { None } else { Some(trimmed) };
+        conn.execute(
+            "UPDATE runs SET summary = ?1 WHERE id = ?2",
+            params![value, run_id],
+        )?;
+        Ok(())
+    }
+
+    /// Append `text` to this run's summary on a new line, atomically (so an
+    /// incremental note during a long run can't lose a concurrent write). The
+    /// CASE handles the first append (NULL/empty summary) without a leading
+    /// blank line. Empty/whitespace `text` is a no-op.
+    pub fn append_run_summary(&self, run_id: i64, text: &str) -> Result<()> {
+        let trimmed = text.trim();
+        if trimmed.is_empty() {
+            return Ok(());
+        }
+        let conn = self.inner.lock().unwrap();
+        conn.execute(
+            "UPDATE runs
+                SET summary = CASE
+                    WHEN summary IS NULL OR summary = '' THEN ?1
+                    ELSE summary || char(10) || ?1
+                END
+              WHERE id = ?2",
+            params![trimmed, run_id],
+        )?;
+        Ok(())
+    }
+
     pub fn finish_run(&self, run_id: i64, status: &str, error: Option<&str>) -> Result<()> {
         let conn = self.inner.lock().unwrap();
         let now = Utc::now().to_rfc3339();
@@ -261,7 +324,7 @@ impl Db {
         let mut stmt = conn.prepare(
             "SELECT id, task_id, session_id, project_id, started_at, finished_at, status, error,
                     (SELECT MAX(ts) FROM run_logs WHERE run_id = runs.id) AS last_activity_at,
-                    prompt
+                    prompt, summary
              FROM runs ORDER BY id DESC LIMIT ?1",
         )?;
         let rows = stmt.query_map(params![limit], row_to_run)?;
@@ -277,7 +340,7 @@ impl Db {
         let mut stmt = conn.prepare(
             "SELECT id, task_id, session_id, project_id, started_at, finished_at, status, error,
                     (SELECT MAX(ts) FROM run_logs WHERE run_id = runs.id) AS last_activity_at,
-                    prompt
+                    prompt, summary
              FROM runs WHERE task_id = ?1 ORDER BY id DESC LIMIT ?2",
         )?;
         let rows = stmt.query_map(params![task_id, limit], row_to_run)?;
@@ -427,7 +490,7 @@ impl Db {
         let mut stmt = conn.prepare(
             "SELECT id, task_id, session_id, project_id, started_at, finished_at, status, error,
                     (SELECT MAX(ts) FROM run_logs WHERE run_id = runs.id) AS last_activity_at,
-                    prompt
+                    prompt, summary
              FROM runs WHERE id = ?1",
         )?;
         let row = stmt.query_row(params![id], row_to_run).optional()?;
@@ -605,6 +668,7 @@ fn row_to_run(row: &rusqlite::Row<'_>) -> rusqlite::Result<Run> {
         error: row.get(7)?,
         last_activity_at: last_activity_s.as_deref().map(parse_rfc3339),
         prompt: row.get(9)?,
+        summary: row.get(10)?,
     })
 }
 

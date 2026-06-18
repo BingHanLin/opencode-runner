@@ -289,37 +289,40 @@ pub async fn execute(
         .map(|w| w.path.as_path())
         .unwrap_or(task.working_dir.as_path());
 
-    // When the task opts into memory, fold its saved memory plus recent user
-    // comments into the prompt and register a per-run, task-scoped MCP server
-    // (this binary, `mcp-memory` subcommand) that lets the agent read/update its
-    // memory mid-run via tools. Otherwise the prompt is sent verbatim so
-    // non-opted tasks stay clean.
+    // Wire the scoped MCP server (this binary, `mcp-memory` subcommand) for
+    // EVERY run: it exposes per-run `summary_*` tools the agent uses to record
+    // what it did, plus — when the task opts into memory — the task-scoped
+    // `memory_*` tools. `None` only if we can't resolve our own exe path, in
+    // which case the run proceeds with no MCP tools and the prompt's tool
+    // instructions are suppressed.
+    let mcp_config: Option<String> = crate::mcp_memory::opencode_config_content(
+        &task.id,
+        run_id,
+        db.path(),
+        task.memory_enabled,
+    );
+
+    // Memory-only context: saved memory + recent user comments are folded into
+    // the prompt only when the task opts into memory; otherwise the prompt keeps
+    // just its objective plus the (always-on) summary instructions.
     let saved_memory = if task.memory_enabled {
         db.get_task_memory(&task.id).ok().flatten()
     } else {
         None
     };
-    // Ephemeral opencode config wiring the scoped memory MCP server. `None` if
-    // memory is off or we couldn't resolve our own exe path — in the latter
-    // (degenerate) case the prompt shows memory read-only with no update path.
-    let mcp_config: Option<String> = if task.memory_enabled {
-        crate::mcp_memory::opencode_config_content(&task.id, db.path())
+    let comments = if task.memory_enabled {
+        db.recent_comments_for_task(&task.id, 10).unwrap_or_default()
     } else {
-        None
+        Vec::new()
     };
-    let effective_prompt: String = if task.memory_enabled {
-        let comments = db
-            .recent_comments_for_task(&task.id, 10)
-            .unwrap_or_default();
-        build_augmented_prompt(
-            &task.prompt,
-            saved_memory.as_ref().map(|m| m.content.as_str()),
-            &comments,
-            mcp_config.is_some(),
-        )
-    } else {
-        task.prompt.clone()
-    };
+    let effective_prompt: String = build_augmented_prompt(
+        &task.prompt,
+        task.memory_enabled,
+        saved_memory.as_ref().map(|m| m.content.as_str()),
+        &comments,
+        task.memory_enabled && mcp_config.is_some(),
+        mcp_config.is_some(),
+    );
 
     // Persist exactly what we're about to send so the History tab can show it
     // verbatim — independent of whether opencode allocates a session.
@@ -752,61 +755,89 @@ fn copy_recursive_sync(src: &Path, dst: &Path) -> std::io::Result<()> {
 //                          Memory / comment injection
 // ============================================================================
 
-/// Compose the prompt actually sent to opencode for a memory-enabled task, as a
-/// sequence of `##`-headed sections: the user's objective, the saved memory,
-/// recent user comments (when any), and (when `tools_available`) a pointer to
-/// the MCP memory tools the agent uses to update its memory. `tools_available`
-/// is false only in the degenerate case where the MCP server couldn't be wired
-/// in, in which case the memory is shown read-only with no update mechanism.
-/// Pure (no I/O) so it can be unit-tested.
+/// Compose the prompt actually sent to opencode, as a sequence of `##`-headed
+/// sections: the user's objective; (when `memory_enabled`) the saved memory,
+/// recent user comments, and a pointer to the MCP memory tools; and (when
+/// `summary_tools_available`) a pointer to the per-run summary tools the agent
+/// uses to record what it did. `memory_tools_available` / `summary_tools_available`
+/// are false in the degenerate case where the MCP server couldn't be wired in,
+/// in which case those sections are omitted. With nothing to augment (memory off
+/// and no summary tools), the prompt is returned verbatim so a plain task stays
+/// clean. Pure (no I/O) so it can be unit-tested.
 fn build_augmented_prompt(
     prompt: &str,
+    memory_enabled: bool,
     memory: Option<&str>,
     comments: &[RunComment],
-    tools_available: bool,
+    memory_tools_available: bool,
+    summary_tools_available: bool,
 ) -> String {
+    // Nothing to add — send the user's prompt exactly as written.
+    if !memory_enabled && !summary_tools_available {
+        return prompt.to_string();
+    }
+
     let mut out = String::with_capacity(prompt.len() + 512);
     out.push_str("## Current objective\n");
     out.push_str(prompt.trim());
     out.push('\n');
 
-    out.push_str("\n## Your memory (accumulated from previous runs)\n");
-    match memory.map(str::trim).filter(|m| !m.is_empty()) {
-        Some(m) => {
-            out.push_str(m);
-            out.push('\n');
+    if memory_enabled {
+        out.push_str("\n## Your memory (accumulated from previous runs)\n");
+        match memory.map(str::trim).filter(|m| !m.is_empty()) {
+            Some(m) => {
+                out.push_str(m);
+                out.push('\n');
+            }
+            None => out.push_str("(empty — nothing saved yet)\n"),
         }
-        None => out.push_str("(empty — nothing saved yet)\n"),
+
+        if !comments.is_empty() {
+            out.push_str("\n## User feedback (most recent first)\n");
+            for c in comments {
+                // Comments arrive newest-first; render one bullet each, tagged
+                // with the run they were left on and when, so the agent can
+                // weigh them.
+                let when = c.created_at.format("%Y-%m-%d %H:%M UTC");
+                out.push_str(&format!(
+                    "- [run #{}, {}] {}\n",
+                    c.run_id,
+                    when,
+                    c.text.trim()
+                ));
+            }
+        }
+
+        if memory_tools_available {
+            out.push_str(
+                "\n## Updating your memory\n\
+                 You have memory tools (provided over MCP, exposed with the `orchmem_` prefix):\n\
+                 - `orchmem_memory_get` — read your current saved memory.\n\
+                 - `orchmem_memory_set` — replace your entire saved memory with new content.\n\
+                 - `orchmem_memory_append` — add a note to your memory without rewriting it.\n\
+                 Your current memory is shown above for convenience. If anything is worth remembering\n\
+                 for your future runs of this task, call `orchmem_memory_append` (for incremental\n\
+                 notes) or `orchmem_memory_set` (to rewrite) before you finish. If nothing changed,\n\
+                 don't call them. These tools only affect THIS task's memory.\n",
+            );
+        }
     }
 
-    if !comments.is_empty() {
-        out.push_str("\n## User feedback (most recent first)\n");
-        for c in comments {
-            // Comments arrive newest-first; render one bullet each, tagged with
-            // the run they were left on and when, so the agent can weigh them.
-            let when = c.created_at.format("%Y-%m-%d %H:%M UTC");
-            out.push_str(&format!(
-                "- [run #{}, {}] {}\n",
-                c.run_id,
-                when,
-                c.text.trim()
-            ));
-        }
-    }
-
-    if tools_available {
+    if summary_tools_available {
         out.push_str(
-            "\n## Updating your memory\n\
-             You have memory tools (provided over MCP, exposed with the `orchmem_` prefix):\n\
-             - `orchmem_memory_get` — read your current saved memory.\n\
-             - `orchmem_memory_set` — replace your entire saved memory with new content.\n\
-             - `orchmem_memory_append` — add a note to your memory without rewriting it.\n\
-             Your current memory is shown above for convenience. If anything is worth remembering\n\
-             for your future runs of this task, call `orchmem_memory_append` (for incremental\n\
-             notes) or `orchmem_memory_set` (to rewrite) before you finish. If nothing changed,\n\
-             don't call them. These tools only affect THIS task's memory.\n",
+            "\n## Writing your run summary\n\
+             Before you finish this run, call `orchmem_summary_set` (provided over MCP) to\n\
+             record a summary of this run. If the objective above asks you to produce a\n\
+             report, answer, or output in a particular form, write THAT as the summary —\n\
+             follow the user's requested format. Otherwise, write a concise summary of what\n\
+             you did and how it turned out: what you changed or produced, the key result, and\n\
+             anything notable or that failed. Use `orchmem_summary_append` to build it up\n\
+             incrementally during a long run. Always write a summary before you finish — even\n\
+             if the outcome was \"nothing to do\". This summary is shown in the orchestrator's\n\
+             run history; it is specific to THIS run.\n",
         );
     }
+
     out
 }
 
@@ -829,8 +860,10 @@ mod tests {
     fn augmented_prompt_includes_memory_and_comments() {
         let p = build_augmented_prompt(
             "do the thing",
+            true,
             Some("old note"),
             &[comment(3, "be careful"), comment(2, "use bullets")],
+            true,
             true,
         );
         assert!(p.starts_with("## Current objective\ndo the thing"));
@@ -842,22 +875,45 @@ mod tests {
         // Tool mode advertises the MCP memory tools.
         assert!(p.contains("orchmem_memory_set"));
         assert!(p.contains("orchmem_memory_append"));
+        // Summary tools are always advertised when available.
+        assert!(p.contains("## Writing your run summary"));
+        assert!(p.contains("orchmem_summary_set"));
     }
 
     #[test]
     fn augmented_prompt_without_tools_omits_update_section() {
         // Degenerate case: MCP couldn't be wired in → memory shown read-only,
-        // with no update mechanism (and no legacy <memory> instructions).
-        let p = build_augmented_prompt("do the thing", Some("old note"), &[], false);
+        // with no update mechanism and no summary instructions.
+        let p = build_augmented_prompt("do the thing", true, Some("old note"), &[], false, false);
         assert!(p.contains("old note"));
         assert!(!p.contains("orchmem_"));
         assert!(!p.contains("Updating your memory"));
+        assert!(!p.contains("Writing your run summary"));
     }
 
     #[test]
     fn augmented_prompt_handles_empty_memory_and_no_comments() {
-        let p = build_augmented_prompt("task", None, &[], false);
+        let p = build_augmented_prompt("task", true, None, &[], false, false);
         assert!(p.contains("(empty — nothing saved yet)"));
         assert!(!p.contains("User feedback"));
+    }
+
+    #[test]
+    fn summary_only_when_memory_disabled() {
+        // The common case now: memory off, summary tools on for every run. The
+        // prompt carries the objective + summary instructions, no memory section.
+        let p = build_augmented_prompt("do it", false, None, &[], false, true);
+        assert!(p.starts_with("## Current objective\ndo it"));
+        assert!(!p.contains("Your memory"));
+        assert!(!p.contains("orchmem_memory_"));
+        assert!(p.contains("## Writing your run summary"));
+        assert!(p.contains("orchmem_summary_set"));
+    }
+
+    #[test]
+    fn verbatim_when_nothing_to_augment() {
+        // Memory off and no summary tools (MCP unavailable) → prompt sent as-is.
+        let p = build_augmented_prompt("raw prompt", false, None, &[], false, false);
+        assert_eq!(p, "raw prompt");
     }
 }
