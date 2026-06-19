@@ -4,7 +4,7 @@
 
 export type Theme = "dark" | "light";
 
-const STORAGE_KEY = "orchestrator.theme";
+const STORAGE_KEY = "runner.theme";
 
 export function getInitialTheme(): Theme {
   if (typeof window === "undefined") return "dark";

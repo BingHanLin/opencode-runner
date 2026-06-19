@@ -25,7 +25,7 @@ pub struct Run {
     /// this was recorded. Surfaced read-only in the History tab.
     pub prompt: Option<String>,
     /// The agent's own summary of this run — what it did and how it turned out.
-    /// Written mid/end-run via the scoped MCP `orchmem_summary_*` tools (see
+    /// Written mid/end-run via the scoped MCP `runmem_summary_*` tools (see
     /// `crate::mcp_memory`). `None` until the agent writes one (or for runs that
     /// predate the feature). Surfaced in the History tab.
     pub summary: Option<String>,
@@ -534,7 +534,7 @@ impl Db {
 
     /// Atomically append `text` as a new line to a task's memory in a single
     /// statement. Unlike a read-then-`set_task_memory`, this can't lose a
-    /// concurrent append from another writer (the orchestrator's manual edit, or
+    /// concurrent append from another writer (the app's manual edit, or
     /// — defensively — another run), since the read-modify-write happens inside
     /// one UPDATE under the write lock. Creates the row with `text` as the whole
     /// content if none exists. Empty/whitespace `text` is a no-op.

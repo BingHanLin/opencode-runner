@@ -159,7 +159,7 @@ pub struct StoragePaths {
     /// History tab's Conversation view; opencode itself owns the writes.
     pub opencode_session_db: String,
     /// OS temp dir. Worktree-enabled runs create
-    /// `opencode-orchestrator-wt-<uuid>/` directories here and tear them
+    /// `opencode-runner-wt-<uuid>/` directories here and tear them
     /// down after the run; nothing is persisted across runs.
     pub worktree_root: String,
 }

@@ -101,13 +101,13 @@ jobs:
         with:
           # Only create a release on tag pushes. Manual runs just build.
           tagName: ${{ startsWith(github.ref, 'refs/tags/v') && github.ref_name || '' }}
-          releaseName: 'opencode orchestrator ${{ github.ref_name }}'
+          releaseName: 'opencode runner ${{ github.ref_name }}'
           releaseBody: |
             ### Downloads
 
-            * **Windows** — `opencode orchestrator_<version>_x64-setup.exe` (NSIS installer; will fetch WebView2 runtime on first run if missing).
-            * **Linux (Debian / Ubuntu 22.04+)** — `opencode-orchestrator_<version>_amd64.deb` — install via `sudo apt install ./opencode-orchestrator_*.deb`.
-            * **Linux (any distro, portable)** — `opencode_orchestrator_<version>_amd64.AppImage` — `chmod +x` then run.
+            * **Windows** — `opencode runner_<version>_x64-setup.exe` (NSIS installer; will fetch WebView2 runtime on first run if missing).
+            * **Linux (Debian / Ubuntu 22.04+)** — `opencode-runner_<version>_amd64.deb` — install via `sudo apt install ./opencode-runner_*.deb`.
+            * **Linux (any distro, portable)** — `opencode_runner_<version>_amd64.AppImage` — `chmod +x` then run.
 
             Released as a draft — review and publish from the Releases tab.
           releaseDraft: true

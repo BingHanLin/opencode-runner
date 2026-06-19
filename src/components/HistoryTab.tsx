@@ -578,7 +578,7 @@ function PromptSection({ prompt }: { prompt: string | null }) {
 // ============================================================================
 
 // The agent's own summary of the run, written mid/end-run via the scoped MCP
-// `orchmem_summary_*` tools. Read-only here — the UI never edits it. Rendered
+// `runmem_summary_*` tools. Read-only here — the UI never edits it. Rendered
 // as Markdown so reports the agent formats (headings, lists, tables, code)
 // display properly.
 function SummarySection({

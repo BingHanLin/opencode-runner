@@ -53,7 +53,7 @@ pub struct Task {
     /// When true, the runner injects this task's saved memory and recent user
     /// comments into the prompt (see `runner::build_augmented_prompt`) and wires
     /// in a task-scoped MCP server (`crate::mcp_memory`) so the agent can update
-    /// its memory mid-run via the `orchmem_*` tools. Off by default so tasks
+    /// its memory mid-run via the `runmem_*` tools. Off by default so tasks
     /// that don't opt in keep a clean prompt.
     #[serde(default)]
     pub memory_enabled: bool,

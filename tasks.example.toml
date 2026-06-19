@@ -30,6 +30,6 @@ enabled = true
 id = "test-once"
 name = "One-shot test task"
 schedule = "manual"
-working_dir = "D:/shonCloud/opencdoe_orchestrator"
+working_dir = "D:/shonCloud/opencode_runner"
 prompt = "Hello — please reply with a single sentence to confirm you can run."
 enabled = true

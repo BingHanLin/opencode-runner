@@ -1,11 +1,11 @@
 [package]
-name = "opencode_orchestrator"
-version = "0.7.0"
+name = "opencode_runner"
+version = "0.8.0"
 edition = "2021"
 description = "Schedule and run opencode tasks, browse their conversation history. (Tauri 2 / React port)"
 
 [lib]
-name = "opencode_orchestrator_lib"
+name = "opencode_runner_lib"
 crate-type = ["staticlib", "cdylib", "rlib"]
 
 [build-dependencies]

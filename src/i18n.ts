@@ -13,7 +13,7 @@ export const LANGS: { id: Lang; label: string }[] = [
   { id: "zh-TW", label: "繁體中文" },
 ];
 
-const STORAGE_KEY = "orchestrator.lang";
+const STORAGE_KEY = "runner.lang";
 
 export function getInitialLang(): Lang {
   if (typeof window === "undefined") return "en";
@@ -123,7 +123,7 @@ const en = {
     "opencode.db — owned by the opencode CLI; read-only here, used to render conversations.",
   "settings.storage.worktree.label": "Worktree root",
   "settings.storage.worktree.note":
-    "OS temp dir. Worktree-enabled runs create opencode-orchestrator-wt-<uuid>/ folders here and remove them when the run ends.",
+    "OS temp dir. Worktree-enabled runs create opencode-runner-wt-<uuid>/ folders here and remove them when the run ends.",
   "settings.saved": "Saved.",
   "settings.saveFailed": "Save failed: {error}",
 
@@ -384,7 +384,7 @@ const zhTW: Record<MessageKey, string> = {
     "opencode.db — 由 opencode CLI 擁有；此處唯讀，用來呈現對話內容。",
   "settings.storage.worktree.label": "Worktree 根目錄",
   "settings.storage.worktree.note":
-    "作業系統暫存目錄。啟用 worktree 的執行會在此建立 opencode-orchestrator-wt-<uuid>/ 資料夾，並在執行結束時移除。",
+    "作業系統暫存目錄。啟用 worktree 的執行會在此建立 opencode-runner-wt-<uuid>/ 資料夾，並在執行結束時移除。",
   "settings.saved": "已儲存。",
   "settings.saveFailed": "儲存失敗：{error}",
 

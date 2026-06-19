@@ -3,7 +3,18 @@
     "allow": [
       "WebSearch",
       "WebFetch(domain:opencode.ai)",
-      "Bash(cmd *)"
+      "Bash(cmd *)",
+      "Bash(where opencode *)",
+      "Bash(cargo --version)",
+      "Bash(rustc --version)",
+      "Bash(npm --version)",
+      "Bash(node -p \"require\\('./package.json'\\).version\")",
+      "Bash(grep -rm1 '\"version\"' src-tauri/tauri.conf.json)",
+      "Bash(git tag *)",
+      "Bash(grep -E 'src/|src-tauri/src|\\\\.rs$|\\\\.ts$|\\\\.tsx$|\\\\.json$|\\\\.toml$')",
+      "Skill(schedule)",
+      "Bash(npm run *)",
+      "Bash(tee /tmp/tauri-dev.log)"
     ]
   }
 }

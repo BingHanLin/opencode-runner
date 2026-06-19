@@ -446,7 +446,7 @@ pub async fn execute(
     db.finish_run(run_id, final_status, final_error.as_deref())?;
 
     // No post-run memory handling: a memory-enabled task updates its memory
-    // in-run by calling the scoped MCP tools (orchmem_*), which write straight
+    // in-run by calling the scoped MCP tools (runmem_*), which write straight
     // to the db. The History tab's memory panel reflects those writes via the
     // row's updated_at.
 
@@ -612,7 +612,7 @@ async fn prepare_worktree(
     }
 
     let tmp = std::env::temp_dir().join(format!(
-        "opencode-orchestrator-wt-{}",
+        "opencode-runner-wt-{}",
         uuid::Uuid::new_v4()
     ));
     let add_label = match base {
@@ -811,13 +811,13 @@ fn build_augmented_prompt(
         if memory_tools_available {
             out.push_str(
                 "\n## Updating your memory\n\
-                 You have memory tools (provided over MCP, exposed with the `orchmem_` prefix):\n\
-                 - `orchmem_memory_get` — read your current saved memory.\n\
-                 - `orchmem_memory_set` — replace your entire saved memory with new content.\n\
-                 - `orchmem_memory_append` — add a note to your memory without rewriting it.\n\
+                 You have memory tools (provided over MCP, exposed with the `runmem_` prefix):\n\
+                 - `runmem_memory_get` — read your current saved memory.\n\
+                 - `runmem_memory_set` — replace your entire saved memory with new content.\n\
+                 - `runmem_memory_append` — add a note to your memory without rewriting it.\n\
                  Your current memory is shown above for convenience. If anything is worth remembering\n\
-                 for your future runs of this task, call `orchmem_memory_append` (for incremental\n\
-                 notes) or `orchmem_memory_set` (to rewrite) before you finish. If nothing changed,\n\
+                 for your future runs of this task, call `runmem_memory_append` (for incremental\n\
+                 notes) or `runmem_memory_set` (to rewrite) before you finish. If nothing changed,\n\
                  don't call them. These tools only affect THIS task's memory.\n",
             );
         }
@@ -826,14 +826,14 @@ fn build_augmented_prompt(
     if summary_tools_available {
         out.push_str(
             "\n## Writing your run summary\n\
-             Before you finish this run, call `orchmem_summary_set` (provided over MCP) to\n\
+             Before you finish this run, call `runmem_summary_set` (provided over MCP) to\n\
              record a summary of this run. If the objective above asks you to produce a\n\
              report, answer, or output in a particular form, write THAT as the summary —\n\
              follow the user's requested format. Otherwise, write a concise summary of what\n\
              you did and how it turned out: what you changed or produced, the key result, and\n\
-             anything notable or that failed. Use `orchmem_summary_append` to build it up\n\
+             anything notable or that failed. Use `runmem_summary_append` to build it up\n\
              incrementally during a long run. Always write a summary before you finish — even\n\
-             if the outcome was \"nothing to do\". This summary is shown in the orchestrator's\n\
+             if the outcome was \"nothing to do\". This summary is shown in the app's\n\
              run history; it is specific to THIS run.\n",
         );
     }
@@ -873,11 +873,11 @@ mod tests {
         assert!(p.contains("[run #3"));
         assert!(p.contains("be careful"));
         // Tool mode advertises the MCP memory tools.
-        assert!(p.contains("orchmem_memory_set"));
-        assert!(p.contains("orchmem_memory_append"));
+        assert!(p.contains("runmem_memory_set"));
+        assert!(p.contains("runmem_memory_append"));
         // Summary tools are always advertised when available.
         assert!(p.contains("## Writing your run summary"));
-        assert!(p.contains("orchmem_summary_set"));
+        assert!(p.contains("runmem_summary_set"));
     }
 
     #[test]
@@ -886,7 +886,7 @@ mod tests {
         // with no update mechanism and no summary instructions.
         let p = build_augmented_prompt("do the thing", true, Some("old note"), &[], false, false);
         assert!(p.contains("old note"));
-        assert!(!p.contains("orchmem_"));
+        assert!(!p.contains("runmem_"));
         assert!(!p.contains("Updating your memory"));
         assert!(!p.contains("Writing your run summary"));
     }
@@ -905,9 +905,9 @@ mod tests {
         let p = build_augmented_prompt("do it", false, None, &[], false, true);
         assert!(p.starts_with("## Current objective\ndo it"));
         assert!(!p.contains("Your memory"));
-        assert!(!p.contains("orchmem_memory_"));
+        assert!(!p.contains("runmem_memory_"));
         assert!(p.contains("## Writing your run summary"));
-        assert!(p.contains("orchmem_summary_set"));
+        assert!(p.contains("runmem_summary_set"));
     }
 
     #[test]

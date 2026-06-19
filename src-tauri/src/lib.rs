@@ -76,9 +76,9 @@ pub fn run() {
         ])
         .setup(|app| {
             // Per-user app data dir resolved from the bundle identifier in
-            // tauri.conf.json. Windows: %APPDATA%\dev.opencode.orchestrator\.
-            // macOS:   ~/Library/Application Support/dev.opencode.orchestrator/.
-            // Linux:   ~/.local/share/dev.opencode.orchestrator/.
+            // tauri.conf.json. Windows: %APPDATA%\dev.opencode.runner\.
+            // macOS:   ~/Library/Application Support/dev.opencode.runner/.
+            // Linux:   ~/.local/share/dev.opencode.runner/.
             // Same path in dev and packaged runs, so config/history survive
             // a `cargo clean` and don't depend on where the binary was
             // launched from.
@@ -148,7 +148,7 @@ pub fn run() {
                 .icon(icon)
                 .menu(&menu)
                 .show_menu_on_left_click(false)
-                .tooltip("opencode orchestrator")
+                .tooltip("opencode runner")
                 .on_menu_event(|app, event| match event.id.as_ref() {
                     TRAY_SHOW_ID => {
                         if let Some(w) = app.get_webview_window("main") {

@@ -5,7 +5,7 @@ use crate::runner::{self, CancelRegistry, RunNotifier};
 use anyhow::{Context, Result};
 use tokio_cron_scheduler::{Job, JobScheduler};
 
-/// Wraps a tokio-cron-scheduler with the orchestrator's task list.
+/// Wraps a tokio-cron-scheduler with the app's task list.
 /// `notifier`, if set, is forwarded to each `runner::execute` invocation so
 /// scheduled runs surface step events to the Tauri webview the same way
 /// "Run now" invocations do.

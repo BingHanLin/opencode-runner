@@ -2,7 +2,7 @@
 //!
 //! We shell out to `opencode run --dir X --format json --dangerously-skip-permissions [--model P/M] "<prompt>"`
 //! per task. Each invocation creates its own session inside opencode; we capture
-//! the session id from the JSON event stream so the orchestrator can later read
+//! the session id from the JSON event stream so the app can later read
 //! the conversation from `~/.local/share/opencode/storage/`.
 
 use crate::runner::CancelToken;
@@ -66,7 +66,7 @@ impl Cli {
 
     /// Resolve a configured-path setting into a `Cli`. If the configured path
     /// exists, we use it; otherwise we silently fall back to PATH lookup of
-    /// the bare `opencode` command so the orchestrator stays functional when
+    /// the bare `opencode` command so the app stays functional when
     /// the user's config is stale (binary moved, uninstalled, mis-typed).
     /// Returns the `Cli` and a boolean: `true` if the configured path was
     /// honored, `false` if we fell back.

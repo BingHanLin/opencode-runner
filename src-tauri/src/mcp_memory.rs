@@ -5,18 +5,18 @@
 //!   - `memory_*` — read/update THIS task's accumulated memory. Exposed only
 //!     when the task opts into memory.
 //!
-//! The orchestrator runs this by re-invoking its own binary with the
+//! The app runs this by re-invoking its own binary with the
 //! `mcp-memory` subcommand (see `main.rs`), wired into opencode via an
 //! ephemeral `OPENCODE_CONFIG_CONTENT` config (see [`opencode_config_content`]).
 //! opencode speaks MCP to it over the child's stdin/stdout as newline-delimited
 //! JSON-RPC 2.0.
 //!
 //! Scoping is the security-critical part: the task whose memory may be touched
-//! is fixed by the `ORCH_TASK_ID` env var and the run whose summary may be
-//! touched by `ORCH_RUN_ID` — both injected by the orchestrator at spawn and
+//! is fixed by the `RUNNER_TASK_ID` env var and the run whose summary may be
+//! touched by `RUNNER_RUN_ID` — both injected by the app at spawn and
 //! NEVER tool arguments, so an agent cannot read or clobber another task's
-//! memory or run's summary. The db file is likewise pinned by `ORCH_DB_PATH`,
-//! and `ORCH_MEMORY_ENABLED` gates whether the memory tools are offered at all.
+//! memory or run's summary. The db file is likewise pinned by `RUNNER_DB_PATH`,
+//! and `RUNNER_MEMORY_ENABLED` gates whether the memory tools are offered at all.
 //!
 //! All diagnostics go to stderr; stdout carries only JSON-RPC frames (anything
 //! else there would corrupt the protocol).
@@ -27,8 +27,8 @@ use std::io::{BufRead, Write};
 use std::path::Path;
 
 /// MCP server name. opencode exposes each tool to the model prefixed with this,
-/// e.g. `orchmem_memory_get`, and keys permission rules off the same prefix.
-pub const SERVER_NAME: &str = "orchmem";
+/// e.g. `runmem_memory_get`, and keys permission rules off the same prefix.
+pub const SERVER_NAME: &str = "runmem";
 /// argv[1] that routes a launch of our binary into [`run_stdio_server`].
 pub const SUBCOMMAND: &str = "mcp-memory";
 /// Fallback MCP protocol version if the client doesn't state one. We otherwise
@@ -55,10 +55,10 @@ pub fn opencode_config_content(
                 "type": "local",
                 "command": [exe.to_string_lossy(), SUBCOMMAND],
                 "environment": {
-                    "ORCH_TASK_ID": task_id,
-                    "ORCH_RUN_ID": run_id.to_string(),
-                    "ORCH_DB_PATH": db_path.to_string_lossy(),
-                    "ORCH_MEMORY_ENABLED": if memory_enabled { "1" } else { "0" },
+                    "RUNNER_TASK_ID": task_id,
+                    "RUNNER_RUN_ID": run_id.to_string(),
+                    "RUNNER_DB_PATH": db_path.to_string_lossy(),
+                    "RUNNER_MEMORY_ENABLED": if memory_enabled { "1" } else { "0" },
                 },
                 "enabled": true
             }
@@ -67,7 +67,7 @@ pub fn opencode_config_content(
         // --dangerously-skip-permissions doesn't stall on an `ask` prompt. This
         // merges on top of (doesn't replace) the user's own permission config.
         "permission": {
-            "orchmem_*": "allow"
+            "runmem_*": "allow"
         }
     });
     serde_json::to_string(&cfg).ok()
@@ -77,38 +77,38 @@ pub fn opencode_config_content(
 struct Scope {
     task_id: String,
     /// The run whose summary the `summary_*` tools touch. `None` only in the
-    /// degenerate case where `ORCH_RUN_ID` was missing/unparseable, which
+    /// degenerate case where `RUNNER_RUN_ID` was missing/unparseable, which
     /// disables the summary tools rather than touching the wrong run.
     run_id: Option<i64>,
     /// Whether the task opted into memory; gates the `memory_*` tools.
     memory_enabled: bool,
 }
 
-/// Entry point for the `mcp-memory` subcommand. Reads `ORCH_TASK_ID` /
-/// `ORCH_RUN_ID` / `ORCH_DB_PATH` / `ORCH_MEMORY_ENABLED` from the environment,
+/// Entry point for the `mcp-memory` subcommand. Reads `RUNNER_TASK_ID` /
+/// `RUNNER_RUN_ID` / `RUNNER_DB_PATH` / `RUNNER_MEMORY_ENABLED` from the environment,
 /// then serves MCP over stdio until stdin closes. Exits the process non-zero on
 /// fatal setup errors (missing task id, db won't open) — opencode then simply
 /// reports the server unavailable and the run proceeds without these tools.
 pub fn run_stdio_server() {
-    let task_id = match std::env::var("ORCH_TASK_ID") {
+    let task_id = match std::env::var("RUNNER_TASK_ID") {
         Ok(v) if !v.is_empty() => v,
         _ => {
-            eprintln!("orchmem: ORCH_TASK_ID not set");
+            eprintln!("runmem: RUNNER_TASK_ID not set");
             std::process::exit(1);
         }
     };
-    let db_path = match std::env::var("ORCH_DB_PATH") {
+    let db_path = match std::env::var("RUNNER_DB_PATH") {
         Ok(v) if !v.is_empty() => v,
         _ => {
-            eprintln!("orchmem: ORCH_DB_PATH not set");
+            eprintln!("runmem: RUNNER_DB_PATH not set");
             std::process::exit(1);
         }
     };
-    let run_id: Option<i64> = std::env::var("ORCH_RUN_ID")
+    let run_id: Option<i64> = std::env::var("RUNNER_RUN_ID")
         .ok()
         .and_then(|v| v.trim().parse::<i64>().ok());
     let memory_enabled = matches!(
-        std::env::var("ORCH_MEMORY_ENABLED").ok().as_deref(),
+        std::env::var("RUNNER_MEMORY_ENABLED").ok().as_deref(),
         Some("1") | Some("true")
     );
     let scope = Scope {
@@ -119,7 +119,7 @@ pub fn run_stdio_server() {
     let db = match Db::open(Path::new(&db_path)) {
         Ok(d) => d,
         Err(e) => {
-            eprintln!("orchmem: opening db at {db_path} failed: {e:#}");
+            eprintln!("runmem: opening db at {db_path} failed: {e:#}");
             std::process::exit(1);
         }
     };
@@ -135,7 +135,7 @@ pub fn run_stdio_server() {
             Ok(0) => break, // EOF: opencode closed the pipe, we're done.
             Ok(_) => {}
             Err(e) => {
-                eprintln!("orchmem: stdin read error: {e}");
+                eprintln!("runmem: stdin read error: {e}");
                 break;
             }
         }
@@ -146,7 +146,7 @@ pub fn run_stdio_server() {
         let msg: Value = match serde_json::from_str(trimmed) {
             Ok(v) => v,
             Err(e) => {
-                eprintln!("orchmem: ignoring unparseable frame: {e}");
+                eprintln!("runmem: ignoring unparseable frame: {e}");
                 continue;
             }
         };
@@ -197,7 +197,7 @@ fn handle_message(db: &Db, scope: &Scope, msg: &Value) -> Option<Value> {
 
 /// The tool descriptors offered for this scope: summary tools whenever a run id
 /// is known, memory tools only when the task opted into memory. Names are
-/// unprefixed here; opencode adds the `orchmem_` prefix when exposing them.
+/// unprefixed here; opencode adds the `runmem_` prefix when exposing them.
 fn tool_defs(scope: &Scope) -> Value {
     let mut tools = Vec::new();
     if scope.run_id.is_some() {
