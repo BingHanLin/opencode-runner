@@ -297,11 +297,33 @@ a:hover {
   padding: var(--space-2) var(--space-2) var(--space-3);
 }
 
+/* The dragged row collapses out of the flow (height/opacity animated inline);
+   clip its content so text doesn't spill while it shrinks. */
 .task-row.dragging {
-  opacity: 0.4;
+  overflow: hidden;
+  pointer-events: none;
 }
-.task-row.drag-over {
-  box-shadow: inset 0 2px 0 0 var(--accent);
+/* Where the row will land, the neighbouring row opens a same-height slot
+   (margin animated inline). A thin accent line marks the slot edge so the
+   empty gap reads as an intentional drop target. */
+.task-row.drag-over-top::after,
+.task-row.drag-over-bottom::after {
+  content: "";
+  position: absolute;
+  left: 6px;
+  right: 6px;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--accent);
+  box-shadow: 0 0 6px 0 var(--accent);
+  pointer-events: none;
+  z-index: 1;
+}
+.task-row.drag-over-top::after {
+  top: -1px;
+}
+.task-row.drag-over-bottom::after {
+  bottom: -1px;
 }
 
 .tag-chip-mini {
@@ -376,7 +398,13 @@ a:hover {
   gap: 4px;
   margin-bottom: 2px;
   position: relative;
-  transition: background-color var(--duration-fast) var(--ease);
+  box-sizing: border-box;
+  transition:
+    background-color var(--duration-fast) var(--ease),
+    height 170ms var(--ease),
+    margin 170ms var(--ease),
+    padding 170ms var(--ease),
+    opacity 170ms var(--ease);
 }
 .task-row::before {
   content: "";

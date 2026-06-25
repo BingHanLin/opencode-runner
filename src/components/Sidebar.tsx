@@ -37,6 +37,12 @@ export function Sidebar({
   const [activeTag, setActiveTag] = useState<string | null>(null);
   const [dragId, setDragId] = useState<string | null>(null);
   const [dragOverId, setDragOverId] = useState<string | null>(null);
+  // Natural height of the row being dragged, measured at drag start. Drives
+  // both the collapse of that row and the size of the slot other rows open.
+  const [dragHeight, setDragHeight] = useState(0);
+  // Set one frame after drag start so the row animates from its full height
+  // down to zero (a transition needs a concrete start value to animate from).
+  const [collapsed, setCollapsed] = useState(false);
 
   const allTags = useMemo(() => {
     const s = new Set<string>();
@@ -60,20 +66,28 @@ export function Sidebar({
   // view would silently move tasks past hidden siblings, which is surprising.
   const filterActive = query.trim().length > 0 || activeTag != null;
 
+  function resetDrag() {
+    setDragId(null);
+    setDragOverId(null);
+    setCollapsed(false);
+    setDragHeight(0);
+  }
+
   function onDrop(targetId: string) {
     if (!dragId || dragId === targetId || filterActive) {
-      setDragId(null);
-      setDragOverId(null);
+      resetDrag();
       return;
     }
     const ids = tasks.map((t) => t.id);
     const from = ids.indexOf(dragId);
     const to = ids.indexOf(targetId);
-    if (from < 0 || to < 0) return;
+    if (from < 0 || to < 0) {
+      resetDrag();
+      return;
+    }
     ids.splice(from, 1);
     ids.splice(to, 0, dragId);
-    setDragId(null);
-    setDragOverId(null);
+    resetDrag();
     onReorder(ids);
   }
 
@@ -135,16 +149,44 @@ export function Sidebar({
             <div>{tr("sidebar.noMatch")}</div>
           </div>
         ) : (
-          filtered.map((t) => (
+          filtered.map((t) => {
+            // The insertion line is drawn on the edge where the dragged row
+            // will actually land: below the target when dragging downward,
+            // above it when dragging upward (matches the splice in onDrop).
+            const showDropLine =
+              dragOverId === t.id && dragId != null && dragId !== t.id;
+            let dropEdge = "";
+            if (showDropLine) {
+              const from = filtered.findIndex((x) => x.id === dragId);
+              const to = filtered.findIndex((x) => x.id === t.id);
+              dropEdge = from < to ? "drag-over-bottom" : "drag-over-top";
+            }
+            const isDragging = dragId === t.id;
+            // The dragged row collapses to nothing; the row next to the drop
+            // point opens a same-height slot so the list "makes way" for it.
+            const rowStyle = isDragging
+              ? {
+                  height: collapsed ? 0 : dragHeight || undefined,
+                  paddingTop: collapsed ? 0 : undefined,
+                  paddingBottom: collapsed ? 0 : undefined,
+                  marginTop: 0,
+                  marginBottom: 0,
+                  opacity: collapsed ? 0 : 0.5,
+                }
+              : dropEdge === "drag-over-top"
+                ? { marginTop: dragHeight }
+                : dropEdge === "drag-over-bottom"
+                  ? { marginBottom: dragHeight }
+                  : undefined;
+            return (
             <div
               key={t.id}
+              style={rowStyle}
               className={[
                 "task-row",
                 activeId === t.id && view === "task" ? "active" : "",
-                dragId === t.id ? "dragging" : "",
-                dragOverId === t.id && dragId && dragId !== t.id
-                  ? "drag-over"
-                  : "",
+                isDragging ? "dragging" : "",
+                dropEdge,
               ]
                 .filter(Boolean)
                 .join(" ")}
@@ -154,10 +196,17 @@ export function Sidebar({
               draggable={!filterActive}
               onDragStart={(e) => {
                 if (filterActive) return;
+                setDragHeight(e.currentTarget.getBoundingClientRect().height);
+                setCollapsed(false);
                 setDragId(t.id);
                 e.dataTransfer.effectAllowed = "move";
                 // Some browsers need data set or the drag is aborted on drop.
                 e.dataTransfer.setData("text/plain", t.id);
+                // Collapse one frame later so the height has a value to
+                // animate from (a transition can't start from `auto`).
+                requestAnimationFrame(() =>
+                  requestAnimationFrame(() => setCollapsed(true)),
+                );
               }}
               onDragOver={(e) => {
                 if (!dragId || filterActive) return;
@@ -173,8 +222,7 @@ export function Sidebar({
                 onDrop(t.id);
               }}
               onDragEnd={() => {
-                setDragId(null);
-                setDragOverId(null);
+                resetDrag();
               }}
               onKeyDown={(e) => {
                 if (e.key === "Enter" || e.key === " ") {
@@ -214,7 +262,8 @@ export function Sidebar({
                 ))}
               </div>
             </div>
-          ))
+            );
+          })
         )}
       </div>
       <div className="sidebar-footer">
