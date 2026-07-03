@@ -357,12 +357,7 @@ pub async fn execute(
         let notifier_for_sink = notifier.clone();
         let counter = Arc::new(AtomicI64::new(0));
         Arc::new(move |stream, mut text| {
-            // Guard against a runaway 10MB-on-one-line scenario blowing up
-            // the sqlite row. 4 KB is plenty for any sensible log line.
-            if text.len() > 4096 {
-                text.truncate(4096);
-                text.push_str("…[truncated]");
-            }
+            cap_log_line(&mut text);
             let line_no = counter.fetch_add(1, Ordering::SeqCst);
             match db.append_log(run_id, stream, line_no, &text) {
                 Ok(log_id) => {
@@ -841,6 +836,23 @@ fn build_augmented_prompt(
     out
 }
 
+/// Cap a log line at 4 KB so a runaway 10MB-on-one-line scenario can't blow
+/// up the sqlite row. The cut must land on a char boundary: `String::truncate`
+/// panics mid-character, and with `panic = "abort"` that killed the whole app
+/// whenever a >4 KB line carried multi-byte text at the boundary (v0.8.0 crash
+/// during translation runs).
+fn cap_log_line(text: &mut String) {
+    const MAX: usize = 4096;
+    if text.len() > MAX {
+        let mut cut = MAX;
+        while !text.is_char_boundary(cut) {
+            cut -= 1;
+        }
+        text.truncate(cut);
+        text.push_str("…[truncated]");
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -854,6 +866,30 @@ mod tests {
             text: text.into(),
             created_at: Utc::now(),
         }
+    }
+
+    #[test]
+    fn cap_log_line_short_line_untouched() {
+        let mut s = "短行 short line".to_string();
+        cap_log_line(&mut s);
+        assert_eq!(s, "短行 short line");
+    }
+
+    #[test]
+    fn cap_log_line_ascii_cuts_at_limit() {
+        let mut s = "a".repeat(5000);
+        cap_log_line(&mut s);
+        assert_eq!(s, format!("{}…[truncated]", "a".repeat(4096)));
+    }
+
+    #[test]
+    fn cap_log_line_backs_off_mid_char_boundary() {
+        // Byte 4096 lands inside the 3-byte '中' (bytes 4095..4098); a plain
+        // `truncate(4096)` panics here — the v0.8.0 crash.
+        let mut s = "a".repeat(4095);
+        s.push_str(&"中".repeat(200));
+        cap_log_line(&mut s);
+        assert_eq!(s, format!("{}…[truncated]", "a".repeat(4095)));
     }
 
     #[test]
