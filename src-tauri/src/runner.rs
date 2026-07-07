@@ -500,6 +500,10 @@ struct WorktreeHandle {
 
 impl WorktreeHandle {
     async fn cleanup(self) -> Result<()> {
+        // `git worktree remove` rewrites the repo's worktree/ref metadata, so
+        // take the same per-repo lock the setup path uses — otherwise cleanup
+        // could race a sibling task's concurrent fetch/add on this repo.
+        let _git_lock = crate::gitlock::acquire(&self.repo).await;
         let mut cmd = Command::new("git");
         cmd.arg("-C")
             .arg(&self.repo)
@@ -542,6 +546,13 @@ async fn prepare_worktree(
         );
         return Ok(None);
     }
+
+    // Serialize ref-mutating git ops (fetch / worktree add) against any other
+    // task sharing this repo. Two tasks on the same `working_dir` firing on the
+    // same cron tick would otherwise run `git fetch --all` concurrently and race
+    // on git's ref compare-and-swap ("incorrect old value provided"). Held only
+    // through worktree setup — the opencode run afterwards never holds it.
+    let git_lock = crate::gitlock::acquire(&task.working_dir).await;
 
     let base = task
         .worktree_base
@@ -645,6 +656,11 @@ async fn prepare_worktree(
         ctx.finish_event(run_id, id, "ok", Some(&tmp.display().to_string()));
     }
     tracing::info!(task = %task.id, worktree = ?tmp, base = ?base, "created worktree");
+
+    // Refs are settled — release the repo lock so another task can fetch/add
+    // while this run copies files and then runs opencode. The include copy
+    // below writes into the new worktree, not the shared repo's refs.
+    drop(git_lock);
 
     if task.working_dir.join(".worktreeinclude").exists() {
         let evt = ctx.start_event(run_id, "Worktree: apply .worktreeinclude");

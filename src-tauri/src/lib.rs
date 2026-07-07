@@ -4,6 +4,7 @@
 pub mod commands;
 pub mod config;
 pub mod db;
+pub mod gitlock;
 pub mod mcp_memory;
 pub mod opencode;
 pub mod proc;
