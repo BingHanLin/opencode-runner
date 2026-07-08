@@ -1,6 +1,6 @@
 [package]
 name = "opencode_runner"
-version = "0.9.1"
+version = "0.9.2"
 edition = "2021"
 description = "Schedule and run opencode tasks, browse their conversation history. (Tauri 2 / React port)"
 
